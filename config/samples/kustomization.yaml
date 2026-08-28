@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- praxis_v1alpha1_incident.yaml
+- praxis_v1alpha1_remediationplan.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

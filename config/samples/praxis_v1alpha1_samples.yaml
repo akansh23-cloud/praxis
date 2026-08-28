@@ -1,0 +1,53 @@
+# Sample objects for the dossier's OOMKill scenario, adapted to the
+# v1alpha1 schema. Copy into config/samples/ and apply after `make install`.
+apiVersion: praxis.dev/v1alpha1
+kind: Incident
+metadata:
+  name: checkout-oomkill
+  namespace: default
+spec:
+  source: Alertmanager
+  severity: High
+  description: >-
+    checkout-api pods OOMKilled repeatedly in namespace shop after deploy;
+    KubePodCrashLooping firing for 12m.
+  scope:
+    namespaces:
+      - shop
+---
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: checkout-oomkill-7f3a2c
+  namespace: default
+spec:
+  incidentRef:
+    name: checkout-oomkill
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  hypothesis:
+    summary: "checkout-api OOMKilled after memory limit lowered in commit a91c4e"
+    confidencePercent: 86
+    citations:
+      - ev/pod-status-04
+      - ev/event-11
+      - ev/git-commit-02
+      - ev/promql-mem-01
+  actions:
+    - type: PatchResourceLimits
+      target:
+        kind: Deployment
+        namespace: shop
+        name: checkout-api
+      patchResourceLimits:
+        container: api
+        memory:
+          from: 256Mi
+          to: 512Mi
+  verification:
+    predicate: >-
+      kube_deployment_status_replicas_available{namespace="shop",deployment="checkout-api"} >= 3
+      and rate(container_oom_events_total{namespace="shop",pod=~"checkout-api-.*"}[10m]) == 0
+    window: 10m
+    onFailure: Rollback
+  rollback:
+    strategy: RestorePreviousSpec

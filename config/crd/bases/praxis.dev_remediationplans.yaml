@@ -1,0 +1,551 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: remediationplans.praxis.dev
+spec:
+  group: praxis.dev
+  names:
+    kind: RemediationPlan
+    listKind: RemediationPlanList
+    plural: remediationplans
+    shortNames:
+    - rplan
+    singular: remediationplan
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.blastRadius.tier
+      name: Risk
+      type: string
+    - jsonPath: .status.policyVerdict.result
+      name: Policy
+      type: string
+    - jsonPath: .status.approval.approvedBy
+      name: Approved-By
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RemediationPlan turns an LLM's proposed fix into a typed, policy-validated,
+          dry-run-proven, human-approvable, SLO-verified, automatically reversible
+          change. The model that reasons has no credentials; the process that acts
+          has no model.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RemediationPlanSpec is immutable after creation (transition rule below):
+              approvals are cryptographically bound to a hash of the exact plan, so an
+              edited plan is by definition a different plan. A change of mind means a
+              new object.
+            properties:
+              actions:
+                items:
+                  description: |-
+                    Action is a discriminated union: exactly the parameter block matching Type
+                    must be set. The CEL rules below make the API server enforce this, so a
+                    malformed plan is impossible to persist, not merely flagged.
+                  properties:
+                    patchResourceLimits:
+                      description: PatchResourceLimitsParams adjusts container resources.
+                      properties:
+                        container:
+                          minLength: 1
+                          type: string
+                        cpu:
+                          description: |-
+                            QuantityChange records both sides of a resource change so the diff is
+                            reviewable from the plan alone and drift is detectable at execution time.
+                          properties:
+                            from:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            to:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - from
+                          - to
+                          type: object
+                        memory:
+                          description: |-
+                            QuantityChange records both sides of a resource change so the diff is
+                            reviewable from the plan alone and drift is detectable at execution time.
+                          properties:
+                            from:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            to:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - from
+                          - to
+                          type: object
+                      required:
+                      - container
+                      type: object
+                      x-kubernetes-validations:
+                      - message: at least one of memory or cpu must be set
+                        rule: has(self.memory) || has(self.cpu)
+                    rollbackRelease:
+                      description: RollbackReleaseParams selects the revision to return
+                        to.
+                      properties:
+                        toRevision:
+                          description: |-
+                            ToRevision pins the exact revision. When omitted, the executor
+                            targets the previous revision and records which one it chose.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                      type: object
+                    scaleWorkload:
+                      description: ScaleWorkloadParams bounds a replica change in
+                        both directions.
+                      properties:
+                        fromReplicas:
+                          description: |-
+                            FromReplicas is the replica count observed when the plan was created.
+                            The executor refuses to act if the live value has drifted — optimistic
+                            concurrency at the semantic level, not just resourceVersion.
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        toReplicas:
+                          description: |-
+                            ToReplicas is the desired count. This schema ceiling is the hard
+                            structural bound; the risk scorer and policy gate impose the real,
+                            per-namespace limits on top of it.
+                          format: int32
+                          maximum: 100
+                          minimum: 0
+                          type: integer
+                      required:
+                      - fromReplicas
+                      - toReplicas
+                      type: object
+                    target:
+                      description: |-
+                        TargetRef identifies exactly one object an action operates on. Wildcards
+                        and label selectors are deliberately unsupported: a plan that cannot
+                        enumerate its targets cannot have its blast radius computed.
+                      properties:
+                        kind:
+                          enum:
+                          - Deployment
+                          - StatefulSet
+                          - DaemonSet
+                          - Node
+                          type: string
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace of the target. Required for namespaced kinds; must be
+                            omitted for Node (enforced by CEL on Action).
+                          maxLength: 63
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    type:
+                      description: |-
+                        ActionType is the closed action vocabulary. This enum is the single most
+                        important line in the security architecture: anything the planner emits
+                        outside this list is rejected by the API server's schema validation before
+                        it exists as an object. Prompt injection cannot invent a verb.
+
+                        ADR-001: extend this vocabulary only when a benchmark scenario demands it.
+                      enum:
+                      - RestartWorkload
+                      - ScaleWorkload
+                      - RollbackRelease
+                      - PatchResourceLimits
+                      - CordonNode
+                      type: string
+                  required:
+                  - target
+                  - type
+                  type: object
+                  x-kubernetes-validations:
+                  - message: scaleWorkload params must be set iff type is ScaleWorkload
+                    rule: (self.type == 'ScaleWorkload') == has(self.scaleWorkload)
+                  - message: patchResourceLimits params must be set iff type is PatchResourceLimits
+                    rule: (self.type == 'PatchResourceLimits') == has(self.patchResourceLimits)
+                  - message: rollbackRelease params are only valid for type RollbackRelease
+                    rule: self.type == 'RollbackRelease' || !has(self.rollbackRelease)
+                  - message: CordonNode must target a Node; no other action may
+                    rule: 'self.type == ''CordonNode'' ? self.target.kind == ''Node''
+                      : self.target.kind != ''Node'''
+                  - message: namespace is required for namespaced kinds and forbidden
+                      for Node
+                    rule: 'self.target.kind == ''Node'' ? !has(self.target.namespace)
+                      : has(self.target.namespace)'
+                maxItems: 5
+                minItems: 1
+                type: array
+              evidenceBundleHash:
+                description: |-
+                  EvidenceBundleHash binds this plan to the exact evidence it was
+                  derived from.
+                pattern: ^sha256:[a-f0-9]{64}$
+                type: string
+              hypothesis:
+                description: |-
+                  Hypothesis is the analyzer's ranked explanation. Every claim must be
+                  traceable to an evidence ID; the citation validator (controller-side,
+                  Phase 3) rejects plans whose citations don't resolve against the bundle
+                  named by spec.evidenceBundleHash. That is the structural hallucination
+                  guard — a hard check, not a prompt instruction.
+                properties:
+                  citations:
+                    items:
+                      description: EvidenceID references one item in an evidence bundle,
+                        e.g. "ev/pod-status-04".
+                      maxLength: 128
+                      pattern: ^ev/[a-z0-9][a-z0-9-]*$
+                      type: string
+                    maxItems: 64
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                  confidencePercent:
+                    description: |-
+                      ConfidencePercent in [0,100]. An integer percentage rather than a
+                      float: Kubernetes API conventions forbid floating point in APIs
+                      (serialization ambiguity across clients), and nothing downstream
+                      needs sub-percent precision. (ADR-003)
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  summary:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                required:
+                - citations
+                - confidencePercent
+                - summary
+                type: object
+              incidentRef:
+                description: IncidentRef binds a plan to the incident it remediates.
+                properties:
+                  name:
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: |-
+                      UID pins the plan to a specific incarnation of the incident so a
+                      recreated incident with the same name cannot inherit stale plans.
+                    type: string
+                required:
+                - name
+                type: object
+              rollback:
+                description: |-
+                  RollbackSpec declares intent only. The snapshot that makes rollback
+                  possible is recorded by the executor in status.execution.snapshotRef —
+                  status, not spec, because spec is immutable after creation and the
+                  snapshot cannot exist until execution begins. (ADR-002; deliberately
+                  departs from the research dossier's sketch, which placed snapshotRef in
+                  spec, for exactly this reason.)
+                properties:
+                  strategy:
+                    description: RollbackStrategy names how a failed plan is reversed.
+                    enum:
+                    - RestorePreviousSpec
+                    - None
+                    type: string
+                required:
+                - strategy
+                type: object
+              verification:
+                description: |-
+                  VerificationSpec is the falsifiable success contract, declared before
+                  execution. The LLM proposes it but never evaluates it — the verifier does,
+                  against Prometheus, at the deadline.
+
+                  ADR-004: v1alpha1 accepts free-form PromQL. The roadmap replaces this with
+                  a template library the planner selects from, so a model cannot author a
+                  predicate that trivially passes.
+                properties:
+                  onFailure:
+                    description: |-
+                      FailureAction is what the verifier does when the predicate fails at the
+                      deadline.
+                    enum:
+                    - Rollback
+                    - Escalate
+                    type: string
+                  predicate:
+                    description: |-
+                      Predicate is a PromQL expression that must hold for the sustained
+                      window for the plan to be Verified.
+                    maxLength: 2048
+                    minLength: 1
+                    type: string
+                  window:
+                    description: |-
+                      Window the predicate must hold for, measured from execution
+                      completion.
+                    type: string
+                required:
+                - onFailure
+                - predicate
+                - window
+                type: object
+            required:
+            - actions
+            - evidenceBundleHash
+            - hypothesis
+            - incidentRef
+            - rollback
+            - verification
+            type: object
+            x-kubernetes-validations:
+            - message: RemediationPlan spec is immutable; create a new plan instead
+                of editing
+              rule: self == oldSelf
+            - message: onFailure Rollback requires a rollback strategy
+              rule: self.verification.onFailure != 'Rollback' || self.rollback.strategy
+                != 'None'
+          status:
+            description: |-
+              RemediationPlanStatus is the deterministic machinery's ledger. Condition
+              types used by the controllers: EvidenceValid, CitationsResolved,
+              PolicyPassed, SimulationPassed, Approved, Executed, Verified.
+            properties:
+              approval:
+                description: ApprovalStatus is written only by the approval gate.
+                properties:
+                  approvedAt:
+                    format: date-time
+                    type: string
+                  approvedBy:
+                    type: string
+                  boundTo:
+                    description: |-
+                      BoundTo is sha256 over (evidenceBundleHash + canonical spec + diff):
+                      the approval is void the moment any of those change.
+                    type: string
+                  required:
+                    type: boolean
+                required:
+                - required
+                type: object
+              blastRadius:
+                description: |-
+                  BlastRadius is computed deterministically by the risk scorer from the
+                  plan alone — never by the model.
+                properties:
+                  namespaces:
+                    format: int32
+                    type: integer
+                  objects:
+                    format: int32
+                    type: integer
+                  reversible:
+                    type: boolean
+                  score:
+                    format: int32
+                    type: integer
+                  tier:
+                    description: RiskTier buckets the numeric blast-radius score for
+                      policy and display.
+                    enum:
+                    - Low
+                    - Medium
+                    - High
+                    type: string
+                required:
+                - namespaces
+                - objects
+                - reversible
+                - score
+                - tier
+                type: object
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              execution:
+                description: ExecutionStatus is written only by the executor.
+                properties:
+                  finishedAt:
+                    format: date-time
+                    type: string
+                  snapshotRef:
+                    description: |-
+                      SnapshotRef names the ConfigMap capturing pre-change object state,
+                      written by the executor before the first mutation. (ADR-002)
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                type: object
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: PlanPhase tracks a plan through the control loop.
+                enum:
+                - Pending
+                - Validating
+                - AwaitingApproval
+                - Executing
+                - Verifying
+                - Succeeded
+                - Failed
+                - RolledBack
+                - Rejected
+                type: string
+              policyVerdict:
+                description: |-
+                  PolicyVerdict records which policies, at which version, said what.
+                  Rejections are first-class outcomes: "the policy caught it" is a headline
+                  metric, not a failure.
+                properties:
+                  engine:
+                    description: Engine that produced the verdict, e.g. "kyverno".
+                    type: string
+                  policies:
+                    items:
+                      type: string
+                    type: array
+                  policyVersion:
+                    description: PolicyVersion is the git revision of the policy bundle
+                      evaluated.
+                    type: string
+                  result:
+                    description: VerdictResult is the policy gate's decision.
+                    enum:
+                    - Allow
+                    - Deny
+                    type: string
+                required:
+                - engine
+                - result
+                type: object
+              simulation:
+                description: SimulationResult is the proof-of-safety artifact reference.
+                properties:
+                  diffRef:
+                    description: DiffRef names the ConfigMap holding the rendered
+                      server-side diff.
+                    type: string
+                  dryRun:
+                    description: SimulationOutcome is the server-side dry-run result.
+                    enum:
+                    - Passed
+                    - Failed
+                    - Skipped
+                    type: string
+                  message:
+                    type: string
+                required:
+                - dryRun
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
