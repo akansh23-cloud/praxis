@@ -328,8 +328,9 @@ type ExecutionStatus struct {
 }
 
 // RemediationPlanStatus is the deterministic machinery's ledger. Condition
-// types used by the controllers: EvidenceValid, CitationsResolved,
-// PolicyPassed, SimulationPassed, Approved, Executed, Verified.
+// types used by the controllers (LLD §14): EvidenceValid, CitationsResolved,
+// ScopeValid, PolicyPassed, SimulationPassed, Approved, Executed, Verified,
+// RolledBack.
 type RemediationPlanStatus struct {
 	// +optional
 	Phase PlanPhase `json:"phase,omitempty"`
