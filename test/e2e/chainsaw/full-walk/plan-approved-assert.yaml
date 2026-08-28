@@ -1,0 +1,16 @@
+# The approval verified: the annotation value, the stored boundTo and a
+# recomputation from live state all agreed. The phase stays AwaitingApproval
+# on purpose — execution arrives with the Phase 5 executor.
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: walk-plan
+status:
+  phase: AwaitingApproval
+  approval:
+    required: true
+    approvedBy: chainsaw-e2e
+    (approvedAt != null): true
+  (conditions[?type == 'Approved']):
+    - status: "True"
+      reason: ApprovedAwaitingExecutor

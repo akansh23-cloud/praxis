@@ -94,6 +94,18 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# The Chainsaw suite proves the Phase 1 lifecycle on a real cluster: the full
+# walk to a verified approval, both structural rejections, the wrong-hash
+# rejection and the evidence mismatch. It drives everything through kubectl
+# and the API server — nothing is faked. The manager runs on the host; see
+# hack/e2e-chainsaw.sh for why that is the simpler, sufficient choice for
+# what Phase 1 asserts. The script creates its own cluster (praxis-chainsaw)
+# when none exists and deletes it afterwards only if it created it, so
+# neither the dev cluster nor a reused cluster is ever torn down.
+.PHONY: test-e2e-chainsaw
+test-e2e-chainsaw: chainsaw manifests generate ## Run the Chainsaw e2e suite against a kind cluster (E2E_KEEP_CLUSTER=1 to keep it).
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" CHAINSAW="$(CHAINSAW)" hack/e2e-chainsaw.sh
+
 # KIND_DEV_CLUSTER is the local development cluster (docs/00-MASTER-PLAN.md
 # Phase 0). It is deliberately distinct from KIND_CLUSTER above, which the e2e
 # suite creates and destroys; a dev loop should never be torn down by a test run.
@@ -308,10 +320,12 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
+CHAINSAW_VERSION ?= v0.2.15
 
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -346,6 +360,11 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: chainsaw
+chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary.
+$(CHAINSAW): $(LOCALBIN)
+	$(call go-install-tool,$(CHAINSAW),github.com/kyverno/chainsaw,$(CHAINSAW_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.

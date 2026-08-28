@@ -1,0 +1,11 @@
+apiVersion: praxis.dev/v1alpha1
+kind: Incident
+metadata:
+  name: mismatch-incident
+spec:
+  source: Manual
+  severity: Medium
+  description: Fixture incident whose evidence hash will not match the plan's.
+  scope:
+    namespaces:
+      - shop

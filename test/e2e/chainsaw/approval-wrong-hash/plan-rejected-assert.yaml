@@ -1,0 +1,15 @@
+# Nothing was granted: terminal Rejected, the Approved condition names
+# ApprovalInvalidated, and approvedBy/approvedAt were never written.
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: wrong-hash-plan
+status:
+  phase: Rejected
+  approval:
+    required: true
+    (approvedBy == null || approvedBy == ''): true
+    (approvedAt == null): true
+  (conditions[?type == 'Approved']):
+    - status: "False"
+      reason: ApprovalInvalidated

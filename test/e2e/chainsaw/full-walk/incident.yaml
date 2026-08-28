@@ -1,0 +1,15 @@
+# Namespace is deliberately omitted: chainsaw applies each test's resources
+# into its own ephemeral namespace, so runs never collide.
+apiVersion: praxis.dev/v1alpha1
+kind: Incident
+metadata:
+  name: walk-incident
+spec:
+  source: Alertmanager
+  severity: High
+  description: >-
+    checkout-api pods OOMKilled repeatedly in namespace shop after deploy;
+    KubePodCrashLooping firing for 12m.
+  scope:
+    namespaces:
+      - shop

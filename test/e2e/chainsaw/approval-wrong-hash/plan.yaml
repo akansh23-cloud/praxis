@@ -1,0 +1,25 @@
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: wrong-hash-plan
+spec:
+  incidentRef:
+    name: wrong-hash-incident
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  hypothesis:
+    summary: "checkout-api needs a controlled restart"
+    confidencePercent: 70
+    citations:
+      - ev/pod-status-01
+  actions:
+    - type: RestartWorkload
+      target:
+        kind: Deployment
+        namespace: shop
+        name: checkout-api
+  verification:
+    predicate: up == 1
+    window: 5m
+    onFailure: Escalate
+  rollback:
+    strategy: None

@@ -1,0 +1,18 @@
+# EvidenceValid failed first, so citations and scope were never evaluated —
+# the honest trail of cheapest-first ordering — and no approval was owed.
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: mismatch-plan
+status:
+  phase: Rejected
+  (approval == null): true
+  (conditions[?type == 'EvidenceValid']):
+    - status: "False"
+      reason: EvidenceMismatch
+  (conditions[?type == 'CitationsResolved']):
+    - status: "Unknown"
+      reason: NotYetEvaluated
+  (conditions[?type == 'ScopeValid']):
+    - status: "Unknown"
+      reason: NotYetEvaluated
