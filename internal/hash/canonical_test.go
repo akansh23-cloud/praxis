@@ -17,6 +17,14 @@ import (
 // from the RFC (§3.2.2, §3.2.3, Appendix A), so the implementation is
 // checked against an external authority, not against its own output.
 
+// Vectors shared between the JSON-level and float-level number tables.
+const (
+	textOneEMinus7   = "1e-7"
+	textMinSubnormal = "5e-324"
+	textMaxDouble    = "1.7976931348623157e+308"
+	textOneE20       = "100000000000000000000"
+)
+
 func TestCanonicalizeJSONNumberFormatting(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -34,14 +42,14 @@ func TestCanonicalizeJSONNumberFormatting(t *testing.T) {
 		{"shortest round-trip representation", "333333333.33333329", "333333333.3333333"},
 		{"long fraction collapses to exponent form", "0.000000000000000000000000001", "1e-27"},
 		{"boundary: 1e-6 stays decimal", "0.000001", "0.000001"},
-		{"boundary: 1e-7 goes exponential", "1e-7", "1e-7"},
+		{"boundary: 1e-7 goes exponential", textOneEMinus7, textOneEMinus7},
 		{"go-diverges: 1e-5 stays decimal in ES", "0.00001", "0.00001"},
 		{"go-diverges: negative 1e-5", "-0.00001", "-0.00001"},
 		{"go-diverges: multi-digit mantissa below 1e-4", "3.4e-6", "0.0000034"},
-		{"smallest subnormal double", "5e-324", "5e-324"},
-		{"largest double", "1.7976931348623157e+308", "1.7976931348623157e+308"},
+		{"smallest subnormal double", textMinSubnormal, textMinSubnormal},
+		{"largest double", textMaxDouble, textMaxDouble},
 		{"2^53 exact", "9007199254740992", "9007199254740992"},
-		{"boundary: 1e20 stays decimal", "100000000000000000000", "100000000000000000000"},
+		{"boundary: 1e20 stays decimal", textOneE20, textOneE20},
 		{"boundary: 1e21 goes exponential", "1e+21", "1e+21"},
 		// JCS treats every JSON number as an IEEE-754 double (RFC 8785
 		// §3.2.2.3), so integers beyond 2^53 round to the nearest double.
@@ -69,10 +77,10 @@ func TestFormatES6NumberSpecials(t *testing.T) {
 		want  string
 	}{
 		{"negative zero", math.Copysign(0, -1), "0"},
-		{"smallest subnormal", 5e-324, "5e-324"},
-		{"largest double", math.MaxFloat64, "1.7976931348623157e+308"},
-		{"exponent just below decimal range", 1e-7, "1e-7"},
-		{"exponent at top of decimal range", 1e20, "100000000000000000000"},
+		{"smallest subnormal", 5e-324, textMinSubnormal},
+		{"largest double", math.MaxFloat64, textMaxDouble},
+		{"exponent just below decimal range", 1e-7, textOneEMinus7},
+		{"exponent at top of decimal range", 1e20, textOneE20},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
