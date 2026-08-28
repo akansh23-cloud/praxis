@@ -26,6 +26,13 @@ const (
 
 	// differentEvidenceHash is any other well-formed hash, for mismatch cases.
 	differentEvidenceHash = "sha256:abababababababababababababababababababababababababababababababab"
+
+	// Target fixtures shared by the phase-machine and admission tables.
+	targetKindDeployment = "Deployment"
+	targetKindNode       = "Node"
+	fixtureWorkloadName  = "fixture-workload"
+	fixtureContainerName = "api"
+	fixtureNodeName      = "worker-1"
 )
 
 // nameSeq feeds uniqueName so fixtures from different specs sharing the
@@ -67,9 +74,9 @@ func newTestPlan(name, incidentName, bundleHash string) *praxisv1alpha1.Remediat
 			Actions: []praxisv1alpha1.Action{{
 				Type: praxisv1alpha1.ActionRestartWorkload,
 				Target: praxisv1alpha1.TargetRef{
-					Kind:      "Deployment",
+					Kind:      targetKindDeployment,
 					Namespace: testNamespace,
-					Name:      "fixture-workload",
+					Name:      fixtureWorkloadName,
 				},
 			}},
 			Verification: praxisv1alpha1.VerificationSpec{
