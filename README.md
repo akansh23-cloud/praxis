@@ -4,15 +4,20 @@
 
 [![Tests](https://github.com/akansh23-cloud/praxis/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/akansh23-cloud/praxis/actions/workflows/test.yml)
 [![Lint](https://github.com/akansh23-cloud/praxis/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/akansh23-cloud/praxis/actions/workflows/lint.yml)
+[![E2E (Chainsaw)](https://github.com/akansh23-cloud/praxis/actions/workflows/e2e-chainsaw.yml/badge.svg?branch=main)](https://github.com/akansh23-cloud/praxis/actions/workflows/e2e-chainsaw.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A policy-gated remediation control plane for Kubernetes.
 
-> **Status: Phase 0 of 8 — foundations only.** The API types are implemented and
-> enforced by the API server. **The control loop is not implemented.** Praxis
-> does not currently collect evidence, call a model, score risk, evaluate policy,
-> execute anything, verify anything, or roll anything back. See
-> [Current status](#current-status) for exactly what does and does not exist.
+> **Status: Phase 1 of 8 complete — lifecycle and approval binding proven
+> end-to-end; no execution yet.** A hand-written plan walks
+> Pending → Validating → AwaitingApproval on a real cluster, a human's
+> approval is cryptographically bound to the exact plan and evidence, and
+> tampering — an edited spec, a wrong hash, an out-of-vocabulary verb — is
+> structurally rejected. Praxis still does not collect evidence, call a
+> model, score risk, evaluate policy, execute anything, verify anything, or
+> roll anything back. See [Current status](#current-status) for exactly what
+> does and does not exist.
 
 ---
 
@@ -82,7 +87,7 @@ anything that exists today.
 
 ## Current status
 
-Phase 0 of eight. What that means, concretely:
+Phase 1 of eight complete. What that means, concretely:
 
 **Implemented and verified**
 
@@ -93,30 +98,54 @@ Phase 0 of eight. What that means, concretely:
   the verb, `CordonNode` must target a `Node` and nothing else may, and
   namespace is required for namespaced kinds and forbidden for `Node`.
 - `RemediationPlanSpec` immutability, enforced by a `self == oldSelf` CEL
-  transition rule.
-- Repository scaffold: pinned toolchain, package tree, CI, pre-commit hooks,
-  ADR-001 through ADR-004.
+  transition rule. Every one of these admission rules is table-tested through a
+  real API server (envtest) and end-to-end on kind (Chainsaw).
+- The plan phase machine: `Pending → Validating → AwaitingApproval` plus
+  terminal `Rejected`, with per-phase handlers, honest conditions
+  (`EvidenceValid`, `CitationsResolved`, `ScopeValid`, `Approved`), cheapest-
+  first validation, and proven-idempotent reconciles (zero status writes on
+  settled objects — measured, not assumed).
+- A real evidence-hash check: a plan citing evidence its Incident does not
+  hold is `Rejected/EvidenceMismatch`, even though bundles themselves arrive
+  in Phase 3 (hashes are hand-set until then).
+- Hash-bound approval: entering `AwaitingApproval` computes
+  `status.approval.boundTo` (canonical-JSON + sha256, the LLD §8 interim
+  form); a human approves via the `praxis.dev/approve` annotation, the
+  controller recomputes the hash fresh from live state, and any disagreement
+  lands the plan in `Rejected/ApprovalInvalidated`. Approval UX is
+  deliberately just `kubectl annotate` until the Slack gate (Phase 4).
+- Citation validation and scope checking as interfaces with stub
+  implementations that say so: their conditions read `StubbedInPhase1` in
+  `kubectl describe` — visible honesty over silent fakes. Real
+  implementations land in Phases 3–4.
+- End-to-end proof on kind: a Chainsaw suite covering the full walk, the
+  approval round-trip, wrong-hash rejection, evidence mismatch, the spec-edit
+  refusal and the DeleteNamespace non-persistence — run per PR in CI and
+  reproducible locally with `make test-e2e-chainsaw`. A scripted, repeatable
+  demo lives at `docs/demo/phase1.sh` (`make demo-record` to record it).
 
-**Not implemented — no controller behaviour exists yet**
+**Not implemented**
 
-The reconcilers are the generated kubebuilder scaffold. They observe objects and
-do nothing. Specifically, there is **no** evidence collection, **no** LLM
-integration of any kind, **no** hypothesis generation or citation validation,
-**no** risk scoring, **no** policy evaluation, **no** dry-run simulation, **no**
-approval gate, **no** execution, **no** verification, and **no** rollback. The
-`praxis-analyzer` and `praxis-executor` binaries are placeholder entrypoints
-that exit non-zero telling you which phase implements them. Most `internal/`
-packages are `doc.go` files stating a responsibility and naming their phase.
+There is still **no** evidence collection, **no** LLM integration of any
+kind, **no** hypothesis generation, **no** real citation or scope validation
+(stubs only, labelled as such), **no** risk scoring, **no** policy
+evaluation, **no** dry-run simulation, **no** execution, **no**
+verification, and **no** rollback. An approved plan parks in
+`AwaitingApproval` with `Approved=True` — the `Executing` phase is
+unreachable until the Phase 5 executor exists. The `praxis-analyzer` and
+`praxis-executor` binaries are placeholder entrypoints that exit non-zero
+telling you which phase implements them.
 
-Today Praxis is a **typed, validated object model with a build around it**. That
-is a real and deliberate deliverable — the schema is the security boundary, and
-getting it right before writing a controller is the point — but it is not a
-working remediation system, and nothing here should be run against a cluster you
-care about. There is no release, no published image, no compatibility promise,
-and `v1alpha1` will change.
+Today Praxis is a **validated lifecycle with a cryptographically bound
+approval on top of a typed object model** — a plan can be walked, approved
+and structurally protected, but nothing acts on the cluster. It is not a
+working remediation system, and nothing here should be run against a cluster
+you care about. There is no release, no published image, no compatibility
+promise, and `v1alpha1` will change.
 
 The eight phases and their exit criteria are in
-[`docs/00-MASTER-PLAN.md`](docs/00-MASTER-PLAN.md); a publishable v0.1 is
+[`docs/00-MASTER-PLAN.md`](docs/00-MASTER-PLAN.md), with the per-criterion
+ledger in [`docs/PROGRESS.md`](docs/PROGRESS.md); a publishable v0.1 is
 scheduled for the end of Phase 3.
 
 ---
@@ -163,10 +192,13 @@ make kind-down    # idempotent
 ## Build, test, develop
 
 ```bash
-make lint         # golangci-lint (first run compiles a custom binary — minutes)
-make test         # unit + envtest, against a real API server and etcd
-make build        # compile the manager
-make dev          # kind-up + install + run the manager on your host
+make lint                # golangci-lint (first run compiles a custom binary — minutes)
+make test                # unit + envtest, against a real API server and etcd
+make build               # compile the manager
+make dev                 # kind-up + install + run the manager on your host
+make test-e2e-chainsaw   # the Phase 1 e2e suite, on its own throwaway kind cluster
+make demo                # walk the sample plan to an approved state (needs `make dev`)
+docs/demo/phase1.sh      # the recordable demo: the walk + both structural rejections
 ```
 
 `make help` lists every target. Full setup, the exact environment this was
@@ -180,6 +212,7 @@ verified on, and the dev loop are in
 | Document | What it is for |
 |---|---|
 | [`docs/00-MASTER-PLAN.md`](docs/00-MASTER-PLAN.md) | the eight phases, their scope and exit criteria — *when* |
+| [`docs/PROGRESS.md`](docs/PROGRESS.md) | the exit-criteria ledger: what is met, by which commit, and what is still owed |
 | [`docs/01-HLD.md`](docs/01-HLD.md) | high-level design: components, privilege split, lifecycle, autonomy ladder — *what* |
 | [`docs/02-LLD.md`](docs/02-LLD.md) | low-level design, normative: state machines, interfaces, scoring, RBAC — *how* |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | prerequisites, fresh-clone setup, test layers, troubleshooting |
