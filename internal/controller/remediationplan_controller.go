@@ -22,6 +22,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
+	"github.com/akansh23-cloud/praxis/internal/approve"
 	"github.com/akansh23-cloud/praxis/internal/validate"
 )
 
@@ -185,27 +186,108 @@ func (r *RemediationPlanReconciler) handleValidating(
 
 	// Every check passed. All plans require human approval until the
 	// autonomy ladder arrives in Phase 6 (the L3 auto-execute row of LLD
-	// §4.2 has no grants to consult yet). boundTo is computed when the
-	// approval hash lands in Session 1.2 (LLD §8).
+	// §4.2 has no grants to consult yet). Entering AwaitingApproval binds
+	// the approval to the exact plan and evidence (LLD §8): boundTo is the
+	// only value the praxis.dev/approve annotation will be accepted with.
+	boundTo, err := approve.BoundTo(plan.Spec.EvidenceBundleHash, &plan.Spec)
+	if err != nil {
+		return plan.Status.Phase, 0, err
+	}
 	if plan.Status.Approval == nil {
 		plan.Status.Approval = &praxisv1alpha1.ApprovalStatus{}
 	}
 	plan.Status.Approval.Required = true
+	plan.Status.Approval.BoundTo = boundTo
 	setPlanCondition(plan, praxisv1alpha1.ConditionApproved, metav1.ConditionFalse,
 		praxisv1alpha1.ReasonAwaitingApproval, "Plan passed validation and requires human approval before execution")
 	return praxisv1alpha1.PlanPhaseAwaitingApproval, 0, nil
 }
 
-// handleAwaitingApproval is deliberately inert in Phase 1: the plan is
-// settled until a human acts, and the annotation-approval handler that acts
-// on praxis.dev/approve arrives in Session 1.2. Returning the same phase
-// with nothing mutated makes re-reconciles write-free.
+// handleAwaitingApproval verifies the Phase 1 approval mechanism. The human
+// approves by writing annotation praxis.dev/approve; its value, the stored
+// boundTo, and a binding hash recomputed FRESH from the live spec and the
+// live Incident status must all agree, or the plan is Rejected with reason
+// ApprovalInvalidated. Recomputing rather than trusting the stored value is
+// the LLD §8 discipline: boundTo records what was true at binding time, the
+// recomputation asks whether it is still true at decision time.
+//
+// On a verified approval the phase STAYS AwaitingApproval: the transition
+// to Executing arrives with the Phase 5 executor, and until then an
+// approved plan parks here with condition Approved=True.
 //
 //nolint:unparam // handlers share the (next, requeueAfter, error) shape of LLD §4.3.
 func (r *RemediationPlanReconciler) handleAwaitingApproval(
-	_ context.Context, plan *praxisv1alpha1.RemediationPlan,
+	ctx context.Context, plan *praxisv1alpha1.RemediationPlan,
 ) (praxisv1alpha1.PlanPhase, time.Duration, error) {
-	return plan.Status.Phase, 0, nil
+	// A verified approval is settled history; re-reconciles are no-ops
+	// until the executor picks the plan up in Phase 5.
+	if meta.IsStatusConditionTrue(plan.Status.Conditions, praxisv1alpha1.ConditionApproved) {
+		return plan.Status.Phase, 0, nil
+	}
+
+	annotationValue, ok := plan.Annotations[praxisv1alpha1.AnnotationApprove]
+	if !ok {
+		// Still waiting for the human. The annotation update triggers the
+		// next reconcile through the watch — no polling, no timers.
+		return plan.Status.Phase, 0, nil
+	}
+
+	incident := &praxisv1alpha1.Incident{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: plan.Namespace, Name: plan.Spec.IncidentRef.Name}, incident)
+	switch {
+	case apierrors.IsNotFound(err):
+		return invalidateApproval(plan, fmt.Sprintf(
+			"Referenced Incident %q is gone; the evidence this approval binds to cannot be re-verified",
+			plan.Spec.IncidentRef.Name)), 0, nil
+	case err != nil:
+		return plan.Status.Phase, 0, err
+	}
+	if uid := plan.Spec.IncidentRef.UID; uid != "" && uid != incident.UID {
+		return invalidateApproval(plan, fmt.Sprintf(
+			"Incident %q is now incarnation %s, not the referenced %s; "+
+				"the world this approval was granted in is gone", incident.Name, incident.UID, uid)), 0, nil
+	}
+
+	recomputed, err := approve.BoundTo(incident.Status.EvidenceBundleHash, &plan.Spec)
+	if err != nil {
+		return plan.Status.Phase, 0, err
+	}
+
+	storedBoundTo := ""
+	if plan.Status.Approval != nil {
+		storedBoundTo = plan.Status.Approval.BoundTo
+	}
+	if recomputed != storedBoundTo {
+		return invalidateApproval(plan, fmt.Sprintf(
+			"Binding hash recomputed from live state is %s but the plan was bound to %s; "+
+				"the evidence or the plan changed after binding", recomputed, describeHash(storedBoundTo))), 0, nil
+	}
+	if annotationValue != recomputed {
+		// The annotation value is deliberately not echoed back: telemetry
+		// carries what the plan requires, not arbitrary input.
+		return invalidateApproval(plan, fmt.Sprintf(
+			"Annotation %s does not carry the binding hash %s this plan requires",
+			praxisv1alpha1.AnnotationApprove, recomputed)), 0, nil
+	}
+
+	// All three values agree, so record the human's yes. Approval is
+	// non-nil here: storedBoundTo just matched a never-empty recomputation.
+	plan.Status.Approval.ApprovedBy = plan.Annotations[praxisv1alpha1.AnnotationApprovedBy]
+	now := metav1.Now()
+	plan.Status.Approval.ApprovedAt = &now
+	setPlanCondition(plan, praxisv1alpha1.ConditionApproved, metav1.ConditionTrue,
+		praxisv1alpha1.ReasonApprovedAwaitingExecutor,
+		"Approval verified against the binding hash; execution arrives with the Phase 5 executor")
+	return praxisv1alpha1.PlanPhaseAwaitingApproval, 0, nil
+}
+
+// invalidateApproval records the Approved=False verdict with reason
+// ApprovalInvalidated and routes the plan to terminal Rejected. Nothing is
+// granted on any verification failure — there is no partial approval.
+func invalidateApproval(plan *praxisv1alpha1.RemediationPlan, message string) praxisv1alpha1.PlanPhase {
+	setPlanCondition(plan, praxisv1alpha1.ConditionApproved, metav1.ConditionFalse,
+		praxisv1alpha1.ReasonApprovalInvalidated, message)
+	return praxisv1alpha1.PlanPhaseRejected
 }
 
 // setPlanCondition records one condition with the plan's generation stamped.
