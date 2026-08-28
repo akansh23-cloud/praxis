@@ -1,0 +1,41 @@
+flowchart TB
+    subgraph EXT["External world"]
+        AM["Alertmanager"]
+        LLM["LLM provider<br/>(Anthropic / Ollama)"]
+        HUMAN["On-call engineer<br/>(Slack / kubectl)"]
+        GIT["Git forge +<br/>Argo CD / Flux"]
+    end
+
+    subgraph AN["praxis-analyzer — LLM egress, ZERO write RBAC"]
+        EC["Evidence Collector<br/>(deterministic, capped, hashed)"]
+        HE["Hypothesis Engine<br/>(LLM — must cite evidence)"]
+        CV["Citation Validator<br/>(deterministic)"]
+        PL["Planner<br/>(LLM — schema-constrained)"]
+        EC --> HE --> CV --> PL
+    end
+
+    API[("Kubernetes API<br/>CRDs + CEL admission<br/>closed action vocabulary")]
+
+    subgraph EX["praxis-executor — write RBAC, ZERO egress"]
+        RS["Risk Scorer"]
+        PG["Policy Gate<br/>Kyverno + CEL (final authority)"]
+        SIM["Simulator<br/>SSA dry-run + diff"]
+        AP["Approval Gate<br/>hash-bound"]
+        XR["Executor<br/>snapshots first"]
+        VF["Verifier<br/>pre-declared predicate"]
+        RB["Rollback Controller"]
+        AU["Audit chain +<br/>Runbook compiler"]
+        RS --> PG --> SIM --> AP --> XR --> VF
+        VF -->|fail| RB
+        VF -->|pass| AU
+        RB --> AU
+    end
+
+    AM -->|webhook| EC
+    EC -->|read only| API
+    HE <-->|"prompts (no secrets)"| LLM
+    PL -->|"create RemediationPlan"| API
+    API --> RS
+    AP <-->|approve / deny| HUMAN
+    XR -->|bounded writes| API
+    XR -->|PR mode| GIT

@@ -1,0 +1,36 @@
+stateDiagram-v2
+    [*] --> Pending: plan created (schema + CEL already enforced)
+    Pending --> Validating: reconcile pickup
+
+    state Validating {
+        [*] --> EvidenceHash
+        EvidenceHash --> Citations
+        Citations --> Scope
+        Scope --> RiskScore
+        RiskScore --> PolicyGate
+        PolicyGate --> RBACFeasibility
+        RBACFeasibility --> DryRun
+    }
+
+    Validating --> Rejected: any gate fails<br/>(EvidenceMismatch / CitationInvalid /<br/>ScopeViolation / PolicyDenied /<br/>RBACInfeasible / SimulationFailed / CircuitOpen)
+    Validating --> AwaitingApproval: all gates pass (tier ≤ L2)
+    Validating --> Executing: all gates pass (L3, under budget,<br/>measured history)
+
+    AwaitingApproval --> Executing: approval hash matches boundTo
+    AwaitingApproval --> Rejected: denied / 24h expiry /<br/>ApprovalInvalidated
+
+    Executing --> Verifying: all actions applied,<br/>snapshots stored
+    Executing --> RollingBack: apply failure after<br/>partial application
+    Executing --> Failed: PreconditionDrift<br/>before any mutation
+
+    Verifying --> Succeeded: predicate held for full window
+    Verifying --> RollingBack: predicate failed,<br/>onFailure = Rollback
+    Verifying --> Failed: predicate failed,<br/>onFailure = Escalate
+
+    RollingBack --> RolledBack: restored + health re-check ok<br/>(breaker counter++)
+    RollingBack --> Failed: RollbackUnsafe<br/>(third-party drift — never force)
+
+    Succeeded --> [*]
+    Failed --> [*]
+    RolledBack --> [*]
+    Rejected --> [*]
