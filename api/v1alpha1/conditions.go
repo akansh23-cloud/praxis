@@ -47,4 +47,16 @@ const (
 	// ReasonAwaitingApproval marks a plan that passed every Validating
 	// check and now waits for a human.
 	ReasonAwaitingApproval = "AwaitingApproval"
+
+	// ReasonApprovedAwaitingExecutor marks a plan whose hash-bound approval
+	// verified. The phase stays AwaitingApproval: execution arrives with
+	// the executor in Phase 5, and an approved plan parks here until then.
+	ReasonApprovedAwaitingExecutor = "ApprovedAwaitingExecutor"
+
+	// ReasonApprovalInvalidated rejects a plan whose approval could not be
+	// verified against a freshly recomputed binding hash: the annotation
+	// value, the stored boundTo and the recomputation must all agree, so a
+	// changed evidence bundle, a vanished Incident or a wrong annotation
+	// all land here rather than granting anything.
+	ReasonApprovalInvalidated = "ApprovalInvalidated"
 )
