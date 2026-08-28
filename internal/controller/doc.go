@@ -12,6 +12,8 @@ Licensed under the Apache License, Version 2.0.
 // computed from timestamps in status via RequeueAfter, not from in-process
 // timers.
 //
-// Specification: docs/02-LLD.md §4. The phase machines land in Phase 1; the
-// reconcilers here are still the generated scaffold.
+// Specification: docs/02-LLD.md §4. Phase 1 implements the Incident
+// bookkeeping (Detected, Remediating) and the plan machine through
+// Pending → Validating → AwaitingApproval plus terminal Rejected; the
+// remaining phases arrive with their phases of the master plan.
 package controller
