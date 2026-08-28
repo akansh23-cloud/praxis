@@ -1,0 +1,46 @@
+# Code owners for Praxis.
+#
+# Praxis currently has one maintainer, so this file does not distribute review
+# load — it exists so that GitHub requests a review automatically, so ownership
+# is explicit if that changes, and so the paths where a careless change is
+# expensive are named out loud rather than remembered.
+#
+# Syntax: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# Last matching pattern wins.
+
+# Default owner for everything in the repository.
+*                       @akansh23-cloud
+
+# --- Paths where review is load-bearing ---------------------------------
+#
+# These are listed separately from the catch-all above. Today they resolve to
+# the same person; when a second maintainer joins, this is where the split
+# should start, because these are the files where a plausible-looking change
+# can quietly remove a guarantee.
+
+# The API types are the security boundary. The closed action vocabulary
+# (ADR-001), spec immutability (ADR-002) and the discriminated-union CEL rules
+# are enforced here and nowhere else — weakening a marker weakens the system
+# with no test necessarily failing.
+/api/                   @akansh23-cloud
+
+# Generated from the markers above. Reviewed as evidence that a types change
+# was regenerated, never edited by hand.
+/config/crd/            @akansh23-cloud
+/config/rbac/           @akansh23-cloud
+
+# The privilege split (analyzer: no write RBAC; executor: no egress) is only
+# real if these manifests say so.
+/config/network-policy/ @akansh23-cloud
+
+# The policy bundle is the final authority on what Praxis may do, and there is
+# no bypass path anywhere in the codebase.
+/policies/              @akansh23-cloud
+
+# Architecture decisions and the plan the phases are contracted against.
+/docs/                  @akansh23-cloud
+
+# Supply chain: what CI runs, and what the hooks let through.
+/.github/               @akansh23-cloud
+/.pre-commit-config.yaml @akansh23-cloud
+/Makefile               @akansh23-cloud
