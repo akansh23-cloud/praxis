@@ -204,6 +204,22 @@ demo: ## Walk the sample plan to AwaitingApproval, then approve it with the hash
 		|| { echo "Approval was not verified — check the manager logs."; exit 1; }
 	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
 
+# The scripted Phase 1 demo (docs/demo/phase1.sh) is the recordable superset
+# of `demo`: the walk, the approval round-trip, and both structural
+# rejections. demo-record wraps it with asciinema when available; the script
+# itself needs only kubectl and a running manager (`make dev`).
+.PHONY: demo-record
+demo-record: ## Record docs/demo/phase1.sh with asciinema into docs/demo/phase1.cast (needs `make dev`).
+	@if command -v asciinema >/dev/null 2>&1; then \
+		asciinema rec --overwrite --command "docs/demo/phase1.sh" docs/demo/phase1.cast && \
+		echo "Recorded docs/demo/phase1.cast — replay with: asciinema play docs/demo/phase1.cast"; \
+	else \
+		echo "asciinema is not installed, so nothing was recorded."; \
+		echo "Install it (https://asciinema.org — e.g. 'pipx install asciinema' or your"; \
+		echo "package manager) and re-run 'make demo-record', or run docs/demo/phase1.sh"; \
+		echo "under any terminal recorder."; \
+	fi
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
