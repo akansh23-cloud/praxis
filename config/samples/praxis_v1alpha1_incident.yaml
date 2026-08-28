@@ -1,9 +1,23 @@
+# The dossier's OOMKill scenario: what Alertmanager saw, and the boundary any
+# remediation for it must stay inside.
+#
+# spec.scope is the sole authority on where actions may land. The scope check
+# runs before policy and cannot be overridden by policy — an action targeting
+# anything outside namespace "shop" is rejected regardless of what any policy
+# says. See docs/02-LLD.md §10.
 apiVersion: praxis.dev/v1alpha1
 kind: Incident
 metadata:
   labels:
     app.kubernetes.io/name: praxis
     app.kubernetes.io/managed-by: kustomize
-  name: incident-sample
+  name: checkout-oomkill
 spec:
-  # TODO(user): Add fields here
+  source: Alertmanager
+  severity: High
+  description: >-
+    checkout-api pods OOMKilled repeatedly in namespace shop after deploy;
+    KubePodCrashLooping firing for 12m.
+  scope:
+    namespaces:
+      - shop

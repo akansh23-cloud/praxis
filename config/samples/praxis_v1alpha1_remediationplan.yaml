@@ -1,9 +1,59 @@
+# A remediation plan for the checkout-oomkill Incident.
+#
+# Everything here is a typed, reviewable field — there is no free-form command
+# anywhere in the object, by construction. Things worth trying against a live
+# cluster after `make install`:
+#
+#   - change `type` to something outside the closed vocabulary (say
+#     DeleteNamespace): the API server rejects it, and the object never exists.
+#   - change `type` to ScaleWorkload while leaving patchResourceLimits set: the
+#     discriminated-union CEL rule rejects the mismatch.
+#   - apply this, then edit any spec field: the `self == oldSelf` transition
+#     rule refuses. An edited plan is a different plan, because approvals are
+#     bound to a hash of exactly these bytes. See docs/adr/ADR-002.md.
+#
+# Note there is no snapshotRef in spec: the executor writes it to
+# status.execution.snapshotRef before the first mutation, because it cannot
+# exist until execution begins.
 apiVersion: praxis.dev/v1alpha1
 kind: RemediationPlan
 metadata:
   labels:
     app.kubernetes.io/name: praxis
     app.kubernetes.io/managed-by: kustomize
-  name: remediationplan-sample
+  name: checkout-oomkill-7f3a2c
 spec:
-  # TODO(user): Add fields here
+  incidentRef:
+    name: checkout-oomkill
+  # Binds this plan to the exact evidence it was derived from. Placeholder
+  # value: the evidence collector that produces real bundle hashes lands in
+  # Phase 2.
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  hypothesis:
+    summary: "checkout-api OOMKilled after memory limit lowered in commit a91c4e"
+    confidencePercent: 86
+    citations:
+      - ev/pod-status-04
+      - ev/event-11
+      - ev/git-commit-02
+      - ev/promql-mem-01
+  actions:
+    - type: PatchResourceLimits
+      target:
+        kind: Deployment
+        namespace: shop
+        name: checkout-api
+      patchResourceLimits:
+        container: api
+        memory:
+          from: 256Mi
+          to: 512Mi
+  # Declared before execution and evaluated by the verifier, not by the model.
+  verification:
+    predicate: >-
+      kube_deployment_status_replicas_available{namespace="shop",deployment="checkout-api"} >= 3
+      and rate(container_oom_events_total{namespace="shop",pod=~"checkout-api-.*"}[10m]) == 0
+    window: 10m
+    onFailure: Rollback
+  rollback:
+    strategy: RestorePreviousSpec
