@@ -1,10 +1,17 @@
 name: Tests
 
+# Pull requests plus pushes to main only — see the note in lint.yml.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions: {}
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -18,12 +25,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # setup-go caches the module and build caches by default, keyed on go.sum.
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
+      # Verify tidiness rather than performing it. Running `go mod tidy` in CI
+      # silently repairs an untidy module graph, so the build is green while the
+      # committed go.mod is wrong — which is precisely the state CI exists to
+      # catch. Fail instead, and say how to fix it.
+      - name: Verify go.mod and go.sum are tidy
         run: |
           go mod tidy
-          make test
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
+      - name: Download dependencies
+        run: go mod download
+
+      # `make test` runs manifests, generate, fmt and vet before the tests
+      # themselves, then runs unit tests and envtest against a real API server.
+      - name: Run tests
+        run: make test
+
+      # A types change committed without `make generate manifests` leaves the
+      # schema the API server enforces out of step with the markers in the code.
+      # `make test` regenerates in-process, so any diff here is that drift.
+      - name: Verify generated files are up to date
+        run: |
+          if ! git diff --exit-code -- api/ config/; then
+            echo "::error::Generated files are stale. Run 'make generate manifests' and commit the result."
+            exit 1
+          fi

@@ -1,10 +1,24 @@
 name: E2E Tests
 
+# Manual dispatch only, deliberately.
+#
+# docs/00-MASTER-PLAN.md Phase 0 specifies CI as "lint, vet, test on PR and
+# main. No cluster-dependent jobs yet." This suite creates a kind cluster,
+# builds and loads an image, installs cert-manager and deploys the manager —
+# and what it currently asserts is that the *kubebuilder scaffold* comes up.
+# There is no Praxis controller behaviour for it to gate, so running it on
+# every push buys minutes of CI time and no signal.
+#
+# Re-enable `pull_request` and `push: branches: [main]` in Phase 1, when the
+# phase machine gives it something real to verify.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions: {}
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-e2e:
@@ -23,16 +37,25 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
+      # Pinned, not "latest": an unpinned download makes the job's behaviour a
+      # function of the day it ran. This is the version docs/DEVELOPMENT.md
+      # records as verified.
+      - name: Install kind
+        env:
+          KIND_VERSION: v0.33.0
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
+          kind version
 
-      - name: Verify kind installation
-        run: kind version
-
-      - name: Running Test e2e
+      - name: Verify go.mod and go.sum are tidy
         run: |
           go mod tidy
-          make test-e2e
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
+      - name: Run e2e tests
+        run: make test-e2e
