@@ -4,7 +4,7 @@ One line per exit criterion and functional requirement from
 [`docs/00-MASTER-PLAN.md`](00-MASTER-PLAN.md), with the date it was met and
 the commit that made it true. A criterion is **met** only when its proof ran;
 anything short of that is **pending** with what remains stated plainly.
-Commit hashes are local until pushed.
+Commit hashes below are on `main` at `origin`.
 
 ## Phase 0 — Foundations & repo bootstrap
 
@@ -17,7 +17,7 @@ Commit hashes are local until pushed.
 | FR-P0-05 — repo layout matches LLD §2 (placeholders with doc.go) | met | 2026-08-28 | `5aa03bb` |
 | Exit: fresh-clone build passes locally and in CI | met | 2026-08-28 | `da535a3` |
 | Exit: `kubectl api-resources` shows both kinds after `make install` | met | 2026-08-28 | `7ad6945` |
-| Deliverable: tag `v0.0.1` | met (local) | 2026-08-28 | tag exists; not yet pushed |
+| Deliverable: tag `v0.0.1` | met | 2026-08-28 | annotated tag pushed to origin at `37581a5` |
 
 ## Phase 1 — Object model & phase machine
 
@@ -31,6 +31,6 @@ Commit hashes are local until pushed.
 | FR-P1-06 — Chainsaw suite: sample walk + both structural rejections | met | 2026-08-28 | `818b72f` |
 | Session 1.2 — canonical JSON + sha256 (`internal/hash`), interim LLD §8 `boundTo`, annotation approval with fresh recompute, `ApprovalInvalidated` | met | 2026-08-28 | `0d0c4a4`, `1ca576d`..`3d35054` |
 | Exit: Chainsaw green on kind **locally** (full walk, wrong-hash, evidence mismatch, spec-edit refusal, DeleteNamespace non-persistence) | met | 2026-08-28 | `818b72f` |
-| Exit: Chainsaw green on kind **in CI on a PR** | pending | — | workflow committed (`e212069`); nothing pushed yet, so no CI run has proven it |
-| Exit: asciinema of the walk + rejections committed under `docs/demo/` | pending | — | script + `make demo-record` committed (`4eed68a`) and the demo verified twice consecutively; asciinema was unavailable on the verified host, so no `.cast` exists yet |
-| Milestone: tag `v0.1.0-alpha.1` | pending | — | tagged by the maintainer after verifying this session |
+| Exit: Chainsaw green on kind **in CI on a PR** | met | 2026-08-28 | PR #1 (`phase1-verification` → `main`, head `073a776`): Tests, Lint and E2E (Chainsaw) all green; merged as `3e4df82` |
+| Exit: asciinema of the walk + rejections committed under `docs/demo/` | met | 2026-08-28 | `073a776` — `docs/demo/phase1.cast`, driven by the script from `4eed68a` |
+| Milestone: tag `v0.1.0-alpha.1` | met | 2026-08-28 | annotated tag pushed at `073a776`; reachable from `main` but predates merge commit `3e4df82` |
