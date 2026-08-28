@@ -149,18 +149,20 @@ dev-skaffold: kind-up ## Dev loop running the manager in-cluster via Skaffold (r
 	}
 	skaffold dev --kube-context "kind-$(KIND_DEV_CLUSTER)"
 
-# demo drives the Phase 1 walk (docs/03-CLAUDE-CODE-PLAYBOOK.md, Session 1.1)
-# against the current kubeconfig context: apply the sample Incident, give its
-# status the evidence-bundle hash the sample plan cites (status is writable
-# only through the status subresource, hence --subresource=status), then
-# apply the sample plan. The hash is read from the sample plan itself so the
-# two can never drift apart. A manager must be reconciling — `make dev` in
-# another terminal — for the plan to walk Pending → Validating →
-# AwaitingApproval.
+# demo drives the Phase 1 walk (docs/03-CLAUDE-CODE-PLAYBOOK.md, Sessions
+# 1.1 + 1.2) against the current kubeconfig context: apply the sample
+# Incident, give its status the evidence-bundle hash the sample plan cites
+# (status is writable only through the status subresource, hence
+# --subresource=status), apply the sample plan, then complete the approval
+# round-trip — read status.approval.boundTo, show the exact kubectl annotate
+# command a human would run, run it, and show the approved state. The hash
+# is read from the sample plan itself so the two can never drift apart. A
+# manager must be reconciling — `make dev` in another terminal — for the
+# plan to walk Pending → Validating → AwaitingApproval → approved.
 DEMO_EVIDENCE_HASH = $(shell awk '/evidenceBundleHash:/ {print $$2}' config/samples/praxis_v1alpha1_remediationplan.yaml)
 
 .PHONY: demo
-demo: ## Walk the sample Incident + RemediationPlan to AwaitingApproval (needs a running manager: `make dev`).
+demo: ## Walk the sample plan to AwaitingApproval, then approve it with the hash-bound annotation (needs `make dev`).
 	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_incident.yaml
 	$(KUBECTL) patch incident checkout-oomkill --subresource=status --type=merge \
 		-p '{"status":{"evidenceBundleHash":"$(DEMO_EVIDENCE_HASH)"}}'
@@ -169,6 +171,25 @@ demo: ## Walk the sample Incident + RemediationPlan to AwaitingApproval (needs a
 	@$(KUBECTL) wait --for=jsonpath='{.status.phase}'=AwaitingApproval \
 		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
 		|| { echo "Plan never reached AwaitingApproval — is a manager running? (make dev)"; exit 1; }
+	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
+	@boundTo=$$($(KUBECTL) get remediationplan checkout-oomkill-7f3a2c \
+		-o jsonpath='{.status.approval.boundTo}'); \
+	approver=$${USER:-someone}; \
+	echo ""; \
+	echo "The approval is bound to this exact plan + evidence (LLD §8):"; \
+	echo "  boundTo = $$boundTo"; \
+	echo ""; \
+	echo "A human approves by running exactly:"; \
+	echo "  kubectl annotate remediationplan checkout-oomkill-7f3a2c \\"; \
+	echo "    praxis.dev/approve=$$boundTo \\"; \
+	echo "    praxis.dev/approved-by=$$approver"; \
+	echo ""; \
+	$(KUBECTL) annotate --overwrite remediationplan checkout-oomkill-7f3a2c \
+		"praxis.dev/approve=$$boundTo" "praxis.dev/approved-by=$$approver"
+	@echo "Waiting for the controller to verify the hash and record the approval..."
+	@$(KUBECTL) wait --for=condition=Approved \
+		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
+		|| { echo "Approval was not verified — check the manager logs."; exit 1; }
 	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
 
 .PHONY: lint
