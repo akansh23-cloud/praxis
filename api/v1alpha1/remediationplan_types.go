@@ -301,8 +301,10 @@ type SimulationResult struct {
 type ApprovalStatus struct {
 	Required bool `json:"required"`
 
-	// BoundTo is sha256 over (evidenceBundleHash + canonical spec + diff):
-	// the approval is void the moment any of those change.
+	// BoundTo is the approval binding hash of LLD §8: sha256 over the
+	// evidence bundle hash and the sha256 of the canonical-JSON spec, so
+	// the approval is void the moment either changes. The diff and policy
+	// segments join the hash when those artifacts exist (Phase 4).
 	// +optional
 	BoundTo string `json:"boundTo,omitempty"`
 
@@ -328,8 +330,9 @@ type ExecutionStatus struct {
 }
 
 // RemediationPlanStatus is the deterministic machinery's ledger. Condition
-// types used by the controllers: EvidenceValid, CitationsResolved,
-// PolicyPassed, SimulationPassed, Approved, Executed, Verified.
+// types used by the controllers (LLD §14): EvidenceValid, CitationsResolved,
+// ScopeValid, PolicyPassed, SimulationPassed, Approved, Executed, Verified,
+// RolledBack.
 type RemediationPlanStatus struct {
 	// +optional
 	Phase PlanPhase `json:"phase,omitempty"`

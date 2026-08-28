@@ -1,0 +1,27 @@
+# A plan citing evidence its Incident does not hold is Rejected with reason
+# EvidenceMismatch — and cheapest-first validation means the later checks
+# honestly never ran (their conditions stay Unknown/NotYetEvaluated).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: evidence-mismatch
+spec:
+  description: >-
+    A plan whose spec.evidenceBundleHash differs from the Incident's
+    status.evidenceBundleHash is rejected with reason EvidenceMismatch.
+  steps:
+    - name: incident-holds-different-evidence
+      try:
+        - apply:
+            file: incident.yaml
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" patch incident mismatch-incident \
+                --subresource=status --type=merge \
+                -p '{"status":{"evidenceBundleHash":"sha256:abababababababababababababababababababababababababababababababab"}}'
+    - name: plan-citing-other-evidence-rejects
+      try:
+        - apply:
+            file: plan.yaml
+        - assert:
+            file: plan-rejected-assert.yaml

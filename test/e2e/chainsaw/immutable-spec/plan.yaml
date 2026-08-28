@@ -1,0 +1,29 @@
+# No Incident exists for this plan on purpose: spec immutability is an
+# admission property, enforced before and regardless of anything the
+# controller decides (it will reject the plan for its missing incident —
+# irrelevant here; the spec stays frozen either way).
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: frozen-plan
+spec:
+  incidentRef:
+    name: no-such-incident
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  hypothesis:
+    summary: "checkout-api needs a controlled restart"
+    confidencePercent: 70
+    citations:
+      - ev/pod-status-01
+  actions:
+    - type: RestartWorkload
+      target:
+        kind: Deployment
+        namespace: shop
+        name: checkout-api
+  verification:
+    predicate: up == 1
+    window: 5m
+    onFailure: Escalate
+  rollback:
+    strategy: None

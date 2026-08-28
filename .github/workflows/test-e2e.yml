@@ -2,15 +2,14 @@ name: E2E Tests
 
 # Manual dispatch only, deliberately.
 #
-# docs/00-MASTER-PLAN.md Phase 0 specifies CI as "lint, vet, test on PR and
-# main. No cluster-dependent jobs yet." This suite creates a kind cluster,
-# builds and loads an image, installs cert-manager and deploys the manager —
-# and what it currently asserts is that the *kubebuilder scaffold* comes up.
-# There is no Praxis controller behaviour for it to gate, so running it on
-# every push buys minutes of CI time and no signal.
-#
-# Re-enable `pull_request` and `push: branches: [main]` in Phase 1, when the
-# phase machine gives it something real to verify.
+# The Phase 1 cluster gate this comment once promised landed as the Chainsaw
+# workflow (e2e-chainsaw.yml), which runs on every PR and push to main and
+# verifies actual controller behaviour. This scaffold suite verifies
+# something different — that the in-cluster deployment posture comes up
+# (image build, kustomize overlay, metrics behind authn/authz) — and none of
+# that changed in Phase 1, so it stays on demand. It becomes load-bearing in
+# Phase 5, when ServiceAccounts, RBAC and NetworkPolicies are themselves the
+# test subject; promote it to `pull_request` + `push: branches: [main]` then.
 on:
   workflow_dispatch:
 

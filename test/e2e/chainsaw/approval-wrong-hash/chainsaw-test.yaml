@@ -1,0 +1,34 @@
+# A well-formed but wrong approval hash grants nothing: the plan lands in
+# terminal Rejected with reason ApprovalInvalidated, and no approver or
+# timestamp is ever recorded. The shape of a hash is not THE hash.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: approval-wrong-hash
+spec:
+  description: >-
+    Annotating a waiting plan with a hash that is not its binding hash
+    rejects the plan with reason ApprovalInvalidated.
+  steps:
+    - name: plan-reaches-awaiting-approval
+      try:
+        - apply:
+            file: incident.yaml
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" patch incident wrong-hash-incident \
+                --subresource=status --type=merge \
+                -p '{"status":{"evidenceBundleHash":"sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f"}}'
+        - apply:
+            file: plan.yaml
+        - assert:
+            file: plan-awaiting-assert.yaml
+    - name: wrong-hash-approval-rejects
+      try:
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" annotate --overwrite remediationplan wrong-hash-plan \
+                "praxis.dev/approve=sha256:abababababababababababababababababababababababababababababababab" \
+                "praxis.dev/approved-by=mallory"
+        - assert:
+            file: plan-rejected-assert.yaml

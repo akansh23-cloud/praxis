@@ -1,0 +1,11 @@
+apiVersion: praxis.dev/v1alpha1
+kind: Incident
+metadata:
+  name: wrong-hash-incident
+spec:
+  source: Manual
+  severity: High
+  description: Fixture incident for the wrong-hash approval rejection.
+  scope:
+    namespaces:
+      - shop

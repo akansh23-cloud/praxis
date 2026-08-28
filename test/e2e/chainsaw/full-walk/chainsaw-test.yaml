@@ -1,0 +1,42 @@
+# The Phase 1 happy path, end to end on a real cluster: an Incident gains an
+# evidence hash, a plan citing that hash walks Pending → Validating →
+# AwaitingApproval, and a human's annotation carrying the exact binding hash
+# flips Approved to True while the phase parks awaiting the Phase 5 executor.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: full-walk
+spec:
+  description: >-
+    Incident → status hash → plan → AwaitingApproval → hash-bound annotation
+    approval → Approved=True.
+  steps:
+    - name: incident-with-evidence-hash
+      try:
+        - apply:
+            file: incident.yaml
+        # Status is writable only through the status subresource — the same
+        # channel the Phase 3 evidence collector will use.
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" patch incident walk-incident \
+                --subresource=status --type=merge \
+                -p '{"status":{"evidenceBundleHash":"sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f"}}'
+    - name: plan-reaches-awaiting-approval
+      try:
+        - apply:
+            file: plan.yaml
+        - assert:
+            file: plan-awaiting-assert.yaml
+    - name: hash-bound-approval
+      try:
+        - script:
+            content: |
+              set -e
+              boundTo=$(kubectl -n "$NAMESPACE" get remediationplan walk-plan \
+                -o jsonpath='{.status.approval.boundTo}')
+              kubectl -n "$NAMESPACE" annotate --overwrite remediationplan walk-plan \
+                "praxis.dev/approve=$boundTo" \
+                "praxis.dev/approved-by=chainsaw-e2e"
+        - assert:
+            file: plan-approved-assert.yaml

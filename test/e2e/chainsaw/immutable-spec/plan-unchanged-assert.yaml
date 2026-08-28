@@ -1,0 +1,6 @@
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: frozen-plan
+spec:
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f

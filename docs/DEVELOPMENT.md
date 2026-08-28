@@ -40,6 +40,7 @@ These are read from the Makefile and `go.mod`; you do not choose them.
 | `controller-gen` | v0.21.0 | `Makefile` (`CONTROLLER_TOOLS_VERSION`) |
 | `kustomize` | v5.8.1 | `Makefile` (`KUSTOMIZE_VERSION`) |
 | `golangci-lint` | v2.12.2 | `Makefile` (`GOLANGCI_LINT_VERSION`) and `.custom-gcl.yml` |
+| `chainsaw` | v0.2.15 | `Makefile` (`CHAINSAW_VERSION`) |
 | `setup-envtest` | v0.24.1 | derived from `sigs.k8s.io/controller-runtime` in `go.mod` |
 | envtest control plane | Kubernetes 1.36 | derived from `k8s.io/api` in `go.mod` |
 
@@ -188,7 +189,8 @@ a verified path.
 | Command | What it runs | Needs |
 |---|---|---|
 | `make test` | unit + envtest (real API server + etcd, no kubelet) | Go only |
-| `make test-e2e` | Chainsaw/Ginkgo suite against a throwaway kind cluster | Docker, kind |
+| `make test-e2e-chainsaw` | the Phase 1 Chainsaw suite (walk, approval, rejections) against its own kind cluster `praxis-chainsaw`, manager on the host | Docker, kind |
+| `make test-e2e` | scaffold Ginkgo suite: in-cluster deployment posture (image, kustomize overlay, metrics) on `praxis-test-e2e` | Docker, kind |
 | `make lint` | golangci-lint incl. `logcheck` | Go |
 | `make lint-config` | validates `.golangci.yml` itself | Go |
 

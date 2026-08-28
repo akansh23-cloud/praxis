@@ -1,0 +1,29 @@
+# Structural rejection 1: once admitted, a plan's spec cannot be edited —
+# the API server itself refuses with the CEL transition-rule message. An
+# edited plan would be a different plan, and approvals bind to a hash of
+# exactly this one.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: immutable-spec
+spec:
+  description: >-
+    kubectl patch of an admitted plan's spec is refused by the API server
+    with the CEL immutability message; the persisted spec is unchanged.
+  steps:
+    - name: admit-a-valid-plan
+      try:
+        - apply:
+            file: plan.yaml
+    - name: spec-edit-is-refused
+      try:
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" patch remediationplan frozen-plan --type=merge \
+                -p '{"spec":{"evidenceBundleHash":"sha256:abababababababababababababababababababababababababababababababab"}}'
+            check:
+              ($error != null): true
+              (contains($stderr, 'RemediationPlan spec is immutable; create a new plan instead of editing')): true
+        # The persisted object still carries the admitted hash.
+        - assert:
+            file: plan-unchanged-assert.yaml

@@ -37,6 +37,7 @@ import (
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/controller"
+	"github.com/akansh23-cloud/praxis/internal/validate"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -188,6 +189,11 @@ func main() {
 	if err := (&controller.RemediationPlanReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		// Phase 1 wires the honest stubs: they pass with reason
+		// StubbedInPhase1, visible on the plan's conditions. Real
+		// implementations land in Phases 3 (citations) and 4 (scope).
+		Citations: validate.StubCitationValidator{},
+		Scope:     validate.StubScopeChecker{},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "remediationplan")
 		os.Exit(1)

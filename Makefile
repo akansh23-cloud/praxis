@@ -94,6 +94,18 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# The Chainsaw suite proves the Phase 1 lifecycle on a real cluster: the full
+# walk to a verified approval, both structural rejections, the wrong-hash
+# rejection and the evidence mismatch. It drives everything through kubectl
+# and the API server — nothing is faked. The manager runs on the host; see
+# hack/e2e-chainsaw.sh for why that is the simpler, sufficient choice for
+# what Phase 1 asserts. The script creates its own cluster (praxis-chainsaw)
+# when none exists and deletes it afterwards only if it created it, so
+# neither the dev cluster nor a reused cluster is ever torn down.
+.PHONY: test-e2e-chainsaw
+test-e2e-chainsaw: chainsaw manifests generate ## Run the Chainsaw e2e suite against a kind cluster (E2E_KEEP_CLUSTER=1 to keep it).
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" CHAINSAW="$(CHAINSAW)" hack/e2e-chainsaw.sh
+
 # KIND_DEV_CLUSTER is the local development cluster (docs/00-MASTER-PLAN.md
 # Phase 0). It is deliberately distinct from KIND_CLUSTER above, which the e2e
 # suite creates and destroys; a dev loop should never be torn down by a test run.
@@ -148,6 +160,65 @@ dev-skaffold: kind-up ## Dev loop running the manager in-cluster via Skaffold (r
 		exit 1; \
 	}
 	skaffold dev --kube-context "kind-$(KIND_DEV_CLUSTER)"
+
+# demo drives the Phase 1 walk (docs/03-CLAUDE-CODE-PLAYBOOK.md, Sessions
+# 1.1 + 1.2) against the current kubeconfig context: apply the sample
+# Incident, give its status the evidence-bundle hash the sample plan cites
+# (status is writable only through the status subresource, hence
+# --subresource=status), apply the sample plan, then complete the approval
+# round-trip — read status.approval.boundTo, show the exact kubectl annotate
+# command a human would run, run it, and show the approved state. The hash
+# is read from the sample plan itself so the two can never drift apart. A
+# manager must be reconciling — `make dev` in another terminal — for the
+# plan to walk Pending → Validating → AwaitingApproval → approved.
+DEMO_EVIDENCE_HASH = $(shell awk '/evidenceBundleHash:/ {print $$2}' config/samples/praxis_v1alpha1_remediationplan.yaml)
+
+.PHONY: demo
+demo: ## Walk the sample plan to AwaitingApproval, then approve it with the hash-bound annotation (needs `make dev`).
+	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_incident.yaml
+	$(KUBECTL) patch incident checkout-oomkill --subresource=status --type=merge \
+		-p '{"status":{"evidenceBundleHash":"$(DEMO_EVIDENCE_HASH)"}}'
+	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_remediationplan.yaml
+	@echo "Waiting for the plan to reach AwaitingApproval..."
+	@$(KUBECTL) wait --for=jsonpath='{.status.phase}'=AwaitingApproval \
+		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
+		|| { echo "Plan never reached AwaitingApproval — is a manager running? (make dev)"; exit 1; }
+	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
+	@boundTo=$$($(KUBECTL) get remediationplan checkout-oomkill-7f3a2c \
+		-o jsonpath='{.status.approval.boundTo}'); \
+	approver=$${USER:-someone}; \
+	echo ""; \
+	echo "The approval is bound to this exact plan + evidence (LLD §8):"; \
+	echo "  boundTo = $$boundTo"; \
+	echo ""; \
+	echo "A human approves by running exactly:"; \
+	echo "  kubectl annotate remediationplan checkout-oomkill-7f3a2c \\"; \
+	echo "    praxis.dev/approve=$$boundTo \\"; \
+	echo "    praxis.dev/approved-by=$$approver"; \
+	echo ""; \
+	$(KUBECTL) annotate --overwrite remediationplan checkout-oomkill-7f3a2c \
+		"praxis.dev/approve=$$boundTo" "praxis.dev/approved-by=$$approver"
+	@echo "Waiting for the controller to verify the hash and record the approval..."
+	@$(KUBECTL) wait --for=condition=Approved \
+		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
+		|| { echo "Approval was not verified — check the manager logs."; exit 1; }
+	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
+
+# The scripted Phase 1 demo (docs/demo/phase1.sh) is the recordable superset
+# of `demo`: the walk, the approval round-trip, and both structural
+# rejections. demo-record wraps it with asciinema when available; the script
+# itself needs only kubectl and a running manager (`make dev`).
+.PHONY: demo-record
+demo-record: ## Record docs/demo/phase1.sh with asciinema into docs/demo/phase1.cast (needs `make dev`).
+	@if command -v asciinema >/dev/null 2>&1; then \
+		asciinema rec --overwrite --command "docs/demo/phase1.sh" docs/demo/phase1.cast && \
+		echo "Recorded docs/demo/phase1.cast — replay with: asciinema play docs/demo/phase1.cast"; \
+	else \
+		echo "asciinema is not installed, so nothing was recorded."; \
+		echo "Install it (https://asciinema.org — e.g. 'pipx install asciinema' or your"; \
+		echo "package manager) and re-run 'make demo-record', or run docs/demo/phase1.sh"; \
+		echo "under any terminal recorder."; \
+	fi
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -265,10 +336,12 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
+CHAINSAW_VERSION ?= v0.2.15
 
 #ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -303,6 +376,11 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: chainsaw
+chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary.
+$(CHAINSAW): $(LOCALBIN)
+	$(call go-install-tool,$(CHAINSAW),github.com/kyverno/chainsaw,$(CHAINSAW_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.

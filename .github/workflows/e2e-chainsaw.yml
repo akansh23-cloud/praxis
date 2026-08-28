@@ -1,0 +1,57 @@
+name: E2E (Chainsaw)
+
+# The Phase 1 exit gate (docs/00-MASTER-PLAN.md): the full lifecycle walk and
+# the structural rejections proven against a real kind cluster on every PR
+# and push to main.
+#
+# Kept fast deliberately — no image build, no cert-manager, no deploy: the
+# manager runs on the host against the cluster's kubeconfig, which is
+# sufficient for everything Phase 1 asserts (hack/e2e-chainsaw.sh records
+# the reasoning). setup-go's default module/build caches carry the Go
+# toolchain work between runs; kind and chainsaw are pinned so the job's
+# behaviour is not a function of the day it ran.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: e2e-chainsaw-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chainsaw:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # setup-go caches the module and build caches by default, keyed on go.sum.
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      # Pinned, not "latest" — the version docs/DEVELOPMENT.md records as
+      # verified. Chainsaw itself is pinned by the Makefile (CHAINSAW_VERSION).
+      - name: Install kind
+        env:
+          KIND_VERSION: v0.33.0
+        run: |
+          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      # Creates its own kind cluster, installs the CRDs, runs the manager on
+      # the host, executes test/e2e/chainsaw, and tears everything down.
+      - name: Run the Chainsaw e2e suite
+        run: make test-e2e-chainsaw

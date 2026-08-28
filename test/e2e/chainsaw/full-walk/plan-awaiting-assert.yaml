@@ -1,0 +1,25 @@
+# The plan passed every Validating check, is hash-bound, and waits for a
+# human. The parenthesised keys are JMESPath: the conditions filters select
+# exactly one condition each, and starts_with proves boundTo carries a real
+# hash without hardcoding its value.
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: walk-plan
+status:
+  phase: AwaitingApproval
+  approval:
+    required: true
+    (starts_with(boundTo, 'sha256:')): true
+  (conditions[?type == 'EvidenceValid']):
+    - status: "True"
+      reason: EvidenceHashMatches
+  (conditions[?type == 'CitationsResolved']):
+    - status: "True"
+      reason: StubbedInPhase1
+  (conditions[?type == 'ScopeValid']):
+    - status: "True"
+      reason: StubbedInPhase1
+  (conditions[?type == 'Approved']):
+    - status: "False"
+      reason: AwaitingApproval

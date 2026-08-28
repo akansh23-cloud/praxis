@@ -1,0 +1,58 @@
+# Structural rejection 2: a verb outside the closed vocabulary is refused at
+# admission and never persisted. Prompt injection cannot invent an action —
+# text that should not exist as a plan simply fails to become an object.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: out-of-vocabulary
+spec:
+  description: >-
+    A plan with an out-of-vocabulary verb (DeleteNamespace) is refused by
+    the enum at admission; no object exists afterwards.
+  steps:
+    - name: delete-namespace-verb-is-refused
+      try:
+        - script:
+            content: |
+              cat <<'EOF' | kubectl -n "$NAMESPACE" apply -f -
+              apiVersion: praxis.dev/v1alpha1
+              kind: RemediationPlan
+              metadata:
+                name: forbidden-verb-plan
+              spec:
+                incidentRef:
+                  name: any-incident
+                evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+                hypothesis:
+                  summary: "an injected suggestion to destroy the namespace"
+                  confidencePercent: 99
+                  citations:
+                    - ev/log-template-13
+                actions:
+                  - type: DeleteNamespace
+                    target:
+                      kind: Deployment
+                      namespace: shop
+                      name: checkout-api
+                verification:
+                  predicate: up == 1
+                  window: 5m
+                  onFailure: Escalate
+                rollback:
+                  strategy: None
+              EOF
+            check:
+              ($error != null): true
+              # Two substrings rather than the full 'Unsupported value:
+              # "DeleteNamespace"' message: a plain YAML key cannot contain
+              # a colon-space, and together they pin the same rejection.
+              (contains($stderr, 'Unsupported value')): true
+              (contains($stderr, '"DeleteNamespace"')): true
+    - name: nothing-was-persisted
+      try:
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" get remediationplan forbidden-verb-plan
+            check:
+              ($error != null): true
+              (contains($stderr, 'not found')): true

@@ -1,0 +1,33 @@
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: walk-plan
+spec:
+  incidentRef:
+    name: walk-incident
+  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  hypothesis:
+    summary: "checkout-api OOMKilled after memory limit lowered in commit a91c4e"
+    confidencePercent: 86
+    citations:
+      - ev/pod-status-04
+      - ev/event-11
+      - ev/git-commit-02
+  actions:
+    - type: PatchResourceLimits
+      target:
+        kind: Deployment
+        namespace: shop
+        name: checkout-api
+      patchResourceLimits:
+        container: api
+        memory:
+          from: 256Mi
+          to: 512Mi
+  verification:
+    predicate: >-
+      rate(container_oom_events_total{namespace="shop",pod=~"checkout-api-.*"}[10m]) == 0
+    window: 10m
+    onFailure: Rollback
+  rollback:
+    strategy: RestorePreviousSpec

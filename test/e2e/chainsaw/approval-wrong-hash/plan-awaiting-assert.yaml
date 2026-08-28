@@ -1,0 +1,12 @@
+apiVersion: praxis.dev/v1alpha1
+kind: RemediationPlan
+metadata:
+  name: wrong-hash-plan
+status:
+  phase: AwaitingApproval
+  approval:
+    required: true
+    (starts_with(boundTo, 'sha256:')): true
+  (conditions[?type == 'Approved']):
+    - status: "False"
+      reason: AwaitingApproval
