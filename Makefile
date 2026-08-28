@@ -149,6 +149,28 @@ dev-skaffold: kind-up ## Dev loop running the manager in-cluster via Skaffold (r
 	}
 	skaffold dev --kube-context "kind-$(KIND_DEV_CLUSTER)"
 
+# demo drives the Phase 1 walk (docs/03-CLAUDE-CODE-PLAYBOOK.md, Session 1.1)
+# against the current kubeconfig context: apply the sample Incident, give its
+# status the evidence-bundle hash the sample plan cites (status is writable
+# only through the status subresource, hence --subresource=status), then
+# apply the sample plan. The hash is read from the sample plan itself so the
+# two can never drift apart. A manager must be reconciling — `make dev` in
+# another terminal — for the plan to walk Pending → Validating →
+# AwaitingApproval.
+DEMO_EVIDENCE_HASH = $(shell awk '/evidenceBundleHash:/ {print $$2}' config/samples/praxis_v1alpha1_remediationplan.yaml)
+
+.PHONY: demo
+demo: ## Walk the sample Incident + RemediationPlan to AwaitingApproval (needs a running manager: `make dev`).
+	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_incident.yaml
+	$(KUBECTL) patch incident checkout-oomkill --subresource=status --type=merge \
+		-p '{"status":{"evidenceBundleHash":"$(DEMO_EVIDENCE_HASH)"}}'
+	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_remediationplan.yaml
+	@echo "Waiting for the plan to reach AwaitingApproval..."
+	@$(KUBECTL) wait --for=jsonpath='{.status.phase}'=AwaitingApproval \
+		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
+		|| { echo "Plan never reached AwaitingApproval — is a manager running? (make dev)"; exit 1; }
+	$(KUBECTL) get remediationplan checkout-oomkill-7f3a2c
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
