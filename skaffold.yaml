@@ -1,0 +1,25 @@
+# In-cluster development loop. See the `dev` / `dev-skaffold` targets in the
+# Makefile for why Skaffold rather than Tilt: this repository is already
+# kustomize-native, so Skaffold's kustomize deployer consumes config/default
+# verbatim instead of restating the deployment in a second DSL.
+#
+# `make dev` (manager on the host) is the faster loop and needs no extra tools;
+# reach for this one when you need the manager running as it will in production
+# — with its ServiceAccount, RBAC and NetworkPolicies actually applied.
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: praxis
+build:
+  artifacts:
+    - image: controller
+      docker:
+        dockerfile: Dockerfile
+  local:
+    push: false
+manifests:
+  kustomize:
+    paths:
+      - config/default
+deploy:
+  kubectl: {}

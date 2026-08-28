@@ -77,7 +77,7 @@ Tasks, in order:
    changing semantics.
 3. Create the package tree from docs/02-LLD.md §2 with doc.go files stating
    each package's single responsibility.
-4. Makefile: add targets lint (golangci-lint), test (unit + envtest), 
+4. Makefile: add targets lint (golangci-lint), test (unit + envtest),
    kind-up/kind-down, dev (Tilt or Skaffold — pick one, justify in a comment).
 5. GitHub Actions: ci.yaml running lint, vet, test on PR and main. Cache Go
    modules. No cluster-dependent jobs yet.

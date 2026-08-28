@@ -1,0 +1,63 @@
+# Pre-commit hooks for Praxis (docs/00-MASTER-PLAN.md, Phase 0).
+#
+# Install once per clone:   make pre-commit-install
+# Run against everything:   make pre-commit-run
+#
+# These hooks are a fast local echo of CI, not a replacement for it. Anything
+# slow or cluster-dependent (envtest, e2e) stays in CI and in `make test`.
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '^(LICENSE|.*\.golden)$'
+      - id: end-of-file-fixer
+        # hack/boilerplate.go.txt is a license header template that controller-gen
+        # prepends verbatim; a trailing newline there would be injected into every
+        # generated file. Its missing final newline is deliberate.
+        exclude: '^(LICENSE|hack/boilerplate\.go\.txt|.*\.golden)$'
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      # A remediation control plane has no business ever carrying a key.
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: gofmt
+        entry: hack/pre-commit/gofmt.sh
+        language: script
+        types: [go]
+        pass_filenames: true
+
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: hack/pre-commit/golangci-lint.sh
+        language: script
+        types: [go]
+        pass_filenames: false
+
+      # The generated CRDs and RBAC are the contract the API checkpoint rests
+      # on. Committing a types change without regenerating them is the one
+      # mistake that silently invalidates every downstream guarantee.
+      - id: manifests-current
+        name: generated manifests are up to date
+        entry: hack/pre-commit/check-generated.sh
+        language: script
+        files: '^(api/|internal/controller/|PROJECT$)'
+        pass_filenames: false

@@ -94,6 +94,61 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# KIND_DEV_CLUSTER is the local development cluster (docs/00-MASTER-PLAN.md
+# Phase 0). It is deliberately distinct from KIND_CLUSTER above, which the e2e
+# suite creates and destroys; a dev loop should never be torn down by a test run.
+# Cluster membership is matched exactly (grep -qx) rather than by substring,
+# so "praxis" and "praxis-test-e2e" cannot be mistaken for one another.
+KIND_DEV_CLUSTER ?= praxis
+
+.PHONY: kind-up
+kind-up: ## Create the local kind cluster if it does not already exist (idempotent).
+	@command -v $(KIND) >/dev/null 2>&1 || { \
+		echo "kind is not installed. See docs/DEVELOPMENT.md for the pinned version."; \
+		exit 1; \
+	}
+	@if $(KIND) get clusters 2>/dev/null | grep -qx "$(KIND_DEV_CLUSTER)"; then \
+		echo "kind cluster '$(KIND_DEV_CLUSTER)' already exists; nothing to do."; \
+	else \
+		echo "Creating kind cluster '$(KIND_DEV_CLUSTER)'..."; \
+		$(KIND) create cluster --name "$(KIND_DEV_CLUSTER)"; \
+	fi
+	@$(KUBECTL) cluster-info --context "kind-$(KIND_DEV_CLUSTER)"
+
+.PHONY: kind-down
+kind-down: ## Delete the local kind cluster if it exists (idempotent).
+	@if ! command -v $(KIND) >/dev/null 2>&1; then \
+		echo "kind is not installed; nothing to delete."; \
+	elif $(KIND) get clusters 2>/dev/null | grep -qx "$(KIND_DEV_CLUSTER)"; then \
+		echo "Deleting kind cluster '$(KIND_DEV_CLUSTER)'..."; \
+		$(KIND) delete cluster --name "$(KIND_DEV_CLUSTER)"; \
+	else \
+		echo "kind cluster '$(KIND_DEV_CLUSTER)' does not exist; nothing to do."; \
+	fi
+
+# The dev loop runs the manager on the host against the kind cluster rather than
+# building an image for every change: a controller needs only kubeconfig access,
+# so a host process is both the fastest edit-to-observe cycle and the one that
+# adds no tooling beyond the four dependencies docs/DEVELOPMENT.md already
+# requires (Go, Docker, kind, kubectl).
+#
+# For the in-cluster loop, skaffold.yaml is provided and `make dev-skaffold`
+# runs it. Skaffold was chosen over Tilt because this repository is already
+# kustomize-native: Skaffold's kustomize deployer consumes config/default
+# verbatim, whereas a Tiltfile would restate the same deployment in Starlark and
+# become a second source of truth to keep in sync.
+.PHONY: dev
+dev: kind-up install run ## Dev loop: ensure the kind cluster, install CRDs, run the manager on the host.
+
+.PHONY: dev-skaffold
+dev-skaffold: kind-up ## Dev loop running the manager in-cluster via Skaffold (requires skaffold).
+	@command -v skaffold >/dev/null 2>&1 || { \
+		echo "skaffold is not installed. Use 'make dev' for the host-based loop,"; \
+		echo "or install skaffold: https://skaffold.dev/docs/install/"; \
+		exit 1; \
+	}
+	skaffold dev --kube-context "kind-$(KIND_DEV_CLUSTER)"
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
@@ -105,6 +160,27 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
+
+# Pre-commit runs the fast half of CI locally. It is optional tooling — the
+# repository builds and tests without it — but it is the cheapest place to
+# catch an unregenerated CRD, which is the failure mode that matters most here.
+.PHONY: pre-commit-install
+pre-commit-install: ## Install the git pre-commit hooks (requires pre-commit).
+	@command -v pre-commit >/dev/null 2>&1 || { \
+		echo "pre-commit is not installed. Install it with one of:"; \
+		echo "  pipx install pre-commit"; \
+		echo "  python3 -m pip install --user pre-commit"; \
+		exit 1; \
+	}
+	pre-commit install
+
+.PHONY: pre-commit-run
+pre-commit-run: ## Run every pre-commit hook against the whole tree.
+	@command -v pre-commit >/dev/null 2>&1 || { \
+		echo "pre-commit is not installed; see 'make pre-commit-install'."; \
+		exit 1; \
+	}
+	pre-commit run --all-files
 
 ##@ Build
 
