@@ -1,0 +1,73 @@
+name: Bench (nightly smoke)
+
+# Phase 2 exit criterion (docs/00-MASTER-PLAN.md): a CI smoke job runs one
+# benchmark scenario nightly — with the rule-based baseline from playbook
+# Session 2.3, so the whole referee path stays honest end-to-end: pinned
+# stack install, fault injection, mechanical fault proof, the Agent seam,
+# plan creation against the real CRDs, §17.3 scoring, aggregate report.
+#
+# bad-image-tag is the chosen scenario: the fastest deterministic pack
+# (SSA patch, fault manifests in seconds, no Chaos Mesh experiment) that
+# still exercises the baseline's plan path rather than a timeout.
+#
+# workflow_dispatch exists so the job can be proven green by hand once —
+# the Session 2.3 definition of done — without waiting for the schedule.
+on:
+  schedule:
+    - cron: "43 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bench-nightly
+  cancel-in-progress: false
+
+jobs:
+  bench-smoke:
+    permissions:
+      contents: read
+    name: One scenario with the baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # The bench module pins the Go toolchain; both go.sum files key the
+      # cache because bench builds the root module too (replace ../).
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: bench/go.mod
+          cache-dependency-path: |
+            go.sum
+            bench/go.sum
+
+      # Pinned, not "latest" — the version docs/DEVELOPMENT.md records as
+      # verified; helm and every chart are pinned by the bench module.
+      - name: Install kind
+        env:
+          KIND_VERSION: v0.33.0
+        run: |
+          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Build praxisbench (with pinned helm)
+        run: make -C bench helm build
+
+      - name: Run bad-image-tag with the rule-based baseline
+        run: |
+          bench/bin/praxisbench run --scenario bad-image-tag --runs 1 \
+            --agent rulebased --results-dir "$RUNNER_TEMP/bench-results"
+
+      - name: Render the aggregate report
+        run: bench/bin/praxisbench report --input "$RUNNER_TEMP/bench-results"
+
+      - name: Delete the bench cluster
+        if: always()
+        run: kind delete cluster --name praxis-bench || true
