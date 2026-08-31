@@ -1,0 +1,32 @@
+# The outage: a Chaos Mesh network partition between payment-provider-sim
+# and every shop workload, both directions. The provider's own pods stay
+# Running and Ready — kubelet probes come from the node and are untouched —
+# so in-cluster health looks perfect while pod-originated calls to the
+# provider black-hole. That asymmetry is the external-outage signature the
+# restraint pack grades against.
+#
+# action: partition (iptables drop) rather than loss/delay (tc netem):
+# netem depends on the host kernel's sch_netem module, which WSL2 kernels
+# frequently lack, while iptables is a hard prerequisite of kube-proxy and
+# therefore always present. duration caps the blast at 15m as a belt —
+# teardown deletes the experiment first (runner ChaosMesh semantics), and
+# the namespace with it.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: payment-provider-partition
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [shop]
+    labelSelectors:
+      app: payment-provider-sim
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: [shop]
+      labelSelectors:
+        app.kubernetes.io/part-of: praxis-bench-shop
+  duration: 15m

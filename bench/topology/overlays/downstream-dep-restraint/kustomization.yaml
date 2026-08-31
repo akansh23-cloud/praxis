@@ -1,0 +1,11 @@
+# downstream-dep-restraint overlay — the base shop, untouched. The outage
+# arrives as a Chaos Mesh experiment, deliberately leaving every spec in
+# the namespace exactly as deployed: the scenario's whole point is that
+# nothing in-cluster is wrong, so the topology must not carry a single
+# scenario-specific tweak an agent could mistake for the cause.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: downstream-dep-restraint

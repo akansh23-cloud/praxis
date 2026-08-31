@@ -10,10 +10,11 @@ package faultcheck
 // correspondence in both directions, so a pack cannot land without its
 // check and a check cannot outlive its pack.
 var registry = map[string]Check{
-	"bad-image-tag":        badImageTag,
-	"noisy-neighbour":      noisyNeighbour,
-	"oomkill-after-commit": oomkillAfterCommit,
-	"pdb-deadlock":         pdbDeadlock,
-	"readiness-wrong-port": readinessWrongPort,
-	"smoke":                smokeInert,
+	"bad-image-tag":            badImageTag,
+	"downstream-dep-restraint": downstreamDepRestraint,
+	"noisy-neighbour":          noisyNeighbour,
+	"oomkill-after-commit":     oomkillAfterCommit,
+	"pdb-deadlock":             pdbDeadlock,
+	"readiness-wrong-port":     readinessWrongPort,
+	"smoke":                    smokeInert,
 }
