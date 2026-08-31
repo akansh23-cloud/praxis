@@ -1,0 +1,10 @@
+# bad-image-tag overlay — the base shop, untouched. The scenario's fault is
+# a later spec patch (a typo'd image tag), so pre-fault the topology must be
+# exactly the healthy baseline; the overlay only stamps which scenario
+# deployed the objects.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: bad-image-tag

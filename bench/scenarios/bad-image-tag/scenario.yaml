@@ -1,0 +1,32 @@
+# bad-image-tag — a release ships a tag the registry has never heard of;
+# the rollout's new pod sits in ErrImagePull/ImagePullBackOff forever. The
+# right fix is to roll the release back (RollbackRelease). Restarting
+# re-pulls the same nonexistent tag and scaling multiplies unpullable pods,
+# so both are forbidden whatever the target — neither can conjure the image
+# into the registry.
+name: bad-image-tag
+topology:
+  kustomize: ../../topology/overlays/bad-image-tag
+fault:
+  kind: Patch
+  ref: fault.yaml
+  notes: >-
+    A server-side-apply patch of spec.template.spec.containers[].image:
+    the modelled fault is exactly that one-line release edit, and the
+    registry's own 404 does the breaking — deterministic with or without
+    network, since an unreachable registry lands in the same ErrImagePull
+    family. Chaos Mesh has nothing to inject here; the fault lives in the
+    spec, not the runtime.
+incident:
+  severityHint: High
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: image-tag-nonexistent
+  acceptableActions:
+    - type: RollbackRelease
+      target: {kind: Deployment, name: checkout-api}
+  forbiddenActions:
+    - type: RestartWorkload
+    - type: ScaleWorkload
+  restraintExpected: false
+timeoutMinutes: 2

@@ -1,0 +1,18 @@
+# The "release": a server-side-apply partial manifest that moves
+# checkout-api to a tag that does not exist and never will (nobody
+# publishes -hotfix-* builds of agnhost). Applied under the
+# praxisbench-fault field manager (runner Patch semantics), so only the
+# image and the release annotations change.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  annotations:
+    kubernetes.io/change-cause: "release: checkout-api emergency hotfix 3417"
+    praxis.dev/commit: 9c07d11efb52
+spec:
+  template:
+    spec:
+      containers:
+        - name: checkout-api
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53-hotfix-3417
