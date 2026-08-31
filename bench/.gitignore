@@ -1,0 +1,4 @@
+# Local build artifacts of the bench module. The benchmark kubeconfig
+# (.praxis-bench.kubeconfig) and cover.out are already covered by the
+# repository-root .gitignore (*.kubeconfig, *.out).
+bin/
