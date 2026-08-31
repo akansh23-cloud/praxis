@@ -16,6 +16,9 @@ make -C bench helm      # one-time: pinned helm v3.21.4 into ./bin
 make -C bench build     # builds bench/bin/praxisbench
 bench/bin/praxisbench run --scenario oomkill-after-commit   # one pack
 bench/bin/praxisbench run --scenario all                    # every pack
+bench/bin/praxisbench run --scenario all --runs 5 --agent rulebased
+                        # the Session 2.3 baseline experiment (RESULTS.md)
+bench/bin/praxisbench report --input bench/results/<records>.jsonl
 ```
 
 (or `make -C bench run-smoke` / `make -C bench run-all`, which build
@@ -36,19 +39,23 @@ first).
    topology overlay → wait until every Deployment is fully available →
    inject the fault → **prove the fault manifested** (each pack's
    mechanical check in `cli/faultcheck/`, no agent involved) → file the
-   synthetic Incident → wait up to the scenario's `timeoutMinutes` for a
-   **RemediationPlan** referencing it or the
-   **`praxis.dev/no-action-proposed`** annotation on it → tear the
-   namespaces down (`--keep` skips teardown and prints how to inspect
-   what was left; ChaosMesh faults delete their experiment first so
-   finalizers resolve cleanly).
+   synthetic Incident → *(with an agent wired)* drive it through the
+   Agent seam and persist its verdict → wait up to the scenario's
+   `timeoutMinutes` for a **RemediationPlan** referencing the Incident or
+   the **`praxis.dev/no-action-proposed`** annotation on it → **score**
+   the run against the pack's ground truth and append one JSONL record →
+   tear the namespaces down (`--keep` skips teardown and prints how to
+   inspect what was left; ChaosMesh faults delete their experiment first
+   so finalizers resolve cleanly).
 
-With `--agent none` (the default, and the only agent that exists yet) the
-wait **must** end in a graceful timeout — nothing is wired to respond.
-That timeout is a recorded outcome, not a failure; the run exits 0 and
-prints per-phase timings. The rule-based baseline agent and the scorer
-arrive with Session 2.3; `praxisbench score` and `report` fail loudly
-until then.
+With `--agent none` (the default) the wait **must** end in a graceful
+timeout — nothing is wired to respond. That timeout is a recorded
+outcome, not a failure; the run exits 0 and prints per-phase timings.
+With `--agent rulebased` the intentionally dumb baseline
+(`internal/agents/rulebased` in the main module) answers through the
+seam; its honest, deliberately bad numbers live in
+[`RESULTS.md`](RESULTS.md). Either way every run is scored and the
+aggregate table prints at the end.
 
 Cleanup beyond a run's own teardown (the cluster is reused between runs):
 
@@ -62,10 +69,11 @@ Per `docs/02-LLD.md` §2 and §17:
 
 | Path | Holds |
 |---|---|
-| `cli/` | the Go module's code: `praxisbench/` (cobra CLI), `scenario/` (schema + strict loader), `runner/` (pipeline), `faultcheck/` (per-scenario fault-manifested checks), `deploystack/` (pinned installs), `kube/` (tooling + client) |
+| `cli/` | the Go module's code: `praxisbench/` (cobra CLI), `scenario/` (schema + strict loader), `runner/` (pipeline), `faultcheck/` (per-scenario fault-manifested checks), `agentrun/` (drives an Agent through the seam, scenario-blind), `scoring/` (the deterministic referee: §17.3 matching, JSONL, aggregates), `deploystack/` (pinned installs), `kube/` (tooling + client) |
 | `scenarios/` | one directory per scenario: `scenario.yaml` + its fault payload |
 | `topology/` | the demo shop stack: kustomize base + per-scenario overlays |
 | `deploy/` | pinned helm values for the cluster dependencies |
+| `results/` | gitignored per-invocation JSONL run records; the committed summary is `RESULTS.md` |
 
 `bench/` is its own Go module (`github.com/akansh23-cloud/praxis/bench`)
 so the benchmark depends on Praxis — it files real `Incident` CRs against
@@ -173,8 +181,86 @@ action constitutes a fix.
 
 The six timeouts are 2 minutes each: with `--agent none` the wait always
 runs to its graceful timeout, so Phase 2 sizes it for the mechanical
-pipeline; sessions that wire real agents (2.3+) revisit the budgets per
-pack.
+pipeline. Session 2.3 confirmed the budget: the in-process baseline
+answers in milliseconds, so 2 minutes bounds only the failure path.
+Phase 3's LLM agent revisits the budgets if real inference needs them.
+
+## The agents (`--agent`)
+
+`--agent none` — nothing responds; the run records a graceful
+`NoResponse` timeout. This is the Session 2.1/2.2 behavior, unchanged.
+
+`--agent rulebased` — the **intentionally dumb baseline** of FR-P2-04
+(`internal/agents/rulebased`), driven in-process through the Agent seam
+of LLD §5 (`internal/agents`: `Analyze` then `Plan`). Its entire
+intelligence is three (Event reason, involved kind) reflexes over the
+warning events in the bundle, first match wins:
+
+| # | Pattern | Fixed response |
+|---|---|---|
+| 1 | `Failed` on a Pod, message contains "pull" | `RollbackRelease` the deployment derived from the pod's name |
+| 2 | `Unhealthy` on a Pod, message contains "readiness probe failed" | `RollbackRelease`, same derivation |
+| 3 | `BackOff` on a Pod, message contains "restarting" | `RestartWorkload`, same derivation |
+| — | no warning events, or none match | **no action** — the `praxis.dev/no-action-proposed` annotation |
+
+Targets come from string surgery on pod names (drop the two generated
+suffixes), not owner chains; the verification predicate is one fixed
+availability template. It is the measurement floor: every future agent
+must beat it, and improving it is a bug, not a contribution
+(`internal/agents/rulebased/doc.go`).
+
+**Agents cannot cheat.** The seam's inputs — a sanitized Incident and
+the evidence bundle — are the agent's entire observable world, and four
+layers keep benchmark identity out of them: (1) the Incident's name and
+description are scenario-neutral by construction, identical wording for
+every pack, with the forensic `praxis.dev/bench-scenario` label stripped
+before the seam; (2) `cli/agentrun` may not import the scenario package
+(source-level test), so groundTruth cannot reach an agent input even by
+accident; (3) the seam packages in the main module may import neither a
+cluster client nor any model SDK (import-allowlist test); (4) every live
+run re-serializes the exact inputs the agent saw and fails loudly if the
+scenario name, `rootCauseId`, or a groundTruth marker appears.
+
+## Scoring (`score`, `report`, JSONL)
+
+Every run appends one JSONL record (schema
+`praxisbench/run-record/v1`) to `results/run-<stamp>-<agent>.jsonl`:
+identity, the observed response, the agent's ranked hypotheses, the plan
+as the API server accepted it, and the computed score. The per-run
+metrics (FR-P2-03):
+
+- **diagnosis top-1 / top-3** — deterministic §17.3 matching: EVERY
+  `requiredEvidenceIdPatterns` glob must be satisfied by some citation
+  id, and EVERY `requiredSummaryKeyphrases` entry must appear in the
+  hypothesis summary as an exact, case-insensitive substring. Top-1
+  judges the first hypothesis, top-3 any of the first three. No fuzzy
+  matching, no embeddings, no model grading — ever.
+- **plan schema validity** — did the real API server (CRD schema + CEL)
+  accept the proposed plan? A rejection is a recorded outcome
+  (`PlanInvalid`), not a harness failure.
+- **acceptable-action match** — every action in the plan matches an
+  `acceptableActions` entry (a bare entry constrains the type; a pinned
+  target must match kind and name). On restraint packs the set is empty,
+  so any plan fails.
+- **forbidden-action violations** — count of actions matching
+  `forbiddenActions`.
+- **restraint correctness** — the response kind agrees with
+  `restraintExpected`: no-action where restraint is the answer, a
+  persisted plan where acting is. Timeouts and rejected plans satisfy
+  neither.
+- **time-to-plan** — Incident filed → plan or no-action verdict
+  observed.
+
+Metrics that do not apply to a run (no plan attempted, no response) are
+recorded as null, so aggregate denominators stay honest — `report`
+prints `n=…` whenever a metric's denominator is smaller than the run
+count, and mean (min–max) distributions per FR-P2-05.
+
+`praxisbench report --input <file-or-dir>` renders the aggregate table
+from any records. `praxisbench score --input <file-or-dir>` re-referees
+existing records against the current answer keys (after a ground-truth
+correction) — `run` already scores as it records, and the scorer
+provably never mutates the answer key.
 
 ## The topology
 
