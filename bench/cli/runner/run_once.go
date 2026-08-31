@@ -215,23 +215,36 @@ func (r *Runner) injectFault(ctx context.Context) error {
 	}
 }
 
+// labelBenchScenario records which pack filed an Incident — for humans
+// inspecting a kept run, never for agents: everything under the
+// praxis.dev/bench prefix is stripped before an Incident crosses the Agent
+// seam (agentrun.SanitizeIncident), and neutralDescription below keeps the
+// spec itself free of benchmark identity. Session 2.2 flagged the scenario
+// name in Incident metadata as an answer-key leak; this is the fix.
+const labelBenchScenario = "praxis.dev/bench-scenario"
+
+// neutralDescription is identical for every scenario by design: an agent
+// must diagnose from evidence, not from the incident's phrasing.
+const neutralDescription = "Synthetic incident filed by the praxis benchmark harness: service degradation " +
+	"observed; the scope namespaces are the boundary for any remediation."
+
 // fileIncident creates the synthetic Incident the scenario prescribes.
+// Its name and spec carry no scenario identity (see neutralDescription).
 func (r *Runner) fileIncident(ctx context.Context, n int) (*praxisv1alpha1.Incident, error) {
-	name := fmt.Sprintf("bench-%s-%s-r%d", r.scn.Name, time.Now().UTC().Format("20060102-150405"), n)
+	name := fmt.Sprintf("bench-%s-r%d", time.Now().UTC().Format("20060102-150405"), n)
 	inc := &praxisv1alpha1.Incident{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: r.scn.Incident.ScopeNamespaces[0],
-			Labels:    map[string]string{"praxis.dev/bench-scenario": r.scn.Name},
+			Labels:    map[string]string{labelBenchScenario: r.scn.Name},
 		},
 		Spec: praxisv1alpha1.IncidentSpec{
 			// Manual: the harness files the incident the way an operator
 			// would; nothing here pretends to be Alertmanager.
-			Source:   praxisv1alpha1.IncidentSourceManual,
-			Severity: r.scn.Incident.SeverityHint,
-			Description: fmt.Sprintf("praxisbench scenario %q: synthetic incident filed by the benchmark harness after fault injection (%s %s)",
-				r.scn.Name, r.scn.Fault.Kind, r.scn.Fault.Ref),
-			Scope: praxisv1alpha1.IncidentScope{Namespaces: r.scn.Incident.ScopeNamespaces},
+			Source:      praxisv1alpha1.IncidentSourceManual,
+			Severity:    r.scn.Incident.SeverityHint,
+			Description: neutralDescription,
+			Scope:       praxisv1alpha1.IncidentScope{Namespaces: r.scn.Incident.ScopeNamespaces},
 		},
 	}
 	if err := r.c.Create(ctx, inc); err != nil {
