@@ -45,6 +45,7 @@ type response struct {
 // outcome is the record of one run. The scorer session (2.3) turns these
 // into JSONL; until then they are printed.
 type outcome struct {
+	Scenario string
 	Run      int
 	Response response
 }
@@ -56,7 +57,10 @@ type outcome struct {
 func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 	nss := r.scn.Incident.ScopeNamespaces
 	label := fmt.Sprintf("r%d:", n)
-	oc := outcome{Run: n}
+	if len(r.scns) > 1 {
+		label = r.scn.Name + " " + label
+	}
+	oc := outcome{Scenario: r.scn.Name, Run: n}
 	needCleanup, success := false, false
 	defer func() {
 		if needCleanup && !success && !r.opts.Keep {

@@ -45,7 +45,7 @@ func (r *Runner) printSummary(outcomes []outcome) {
 		if oc.Response.Detail != "" {
 			detail = " (" + oc.Response.Detail + ")"
 		}
-		r.out.f("    run %d: %s%s after %s", oc.Run, oc.Response.Kind, detail, fmtDur(oc.Response.Waited))
+		r.out.f("    %s run %d: %s%s after %s", oc.Scenario, oc.Run, oc.Response.Kind, detail, fmtDur(oc.Response.Waited))
 	}
 	r.out.f("==> timings")
 	var total time.Duration

@@ -56,7 +56,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.Scenario, "scenario", "",
-		"scenario to run: a name under bench/scenarios/ or a path to a scenario.yaml (required)")
+		"scenario to run: a name under bench/scenarios/, a path to a scenario.yaml, or \"all\" for every pack (required)")
 	cmd.Flags().IntVar(&opts.Runs, "runs", 1, "number of times to run the scenario")
 	cmd.Flags().BoolVar(&opts.Keep, "keep", false,
 		"keep the scenario namespaces and Incident after the run instead of tearing them down")

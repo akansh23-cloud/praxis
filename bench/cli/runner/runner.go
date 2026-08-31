@@ -53,11 +53,16 @@ type Options struct {
 	Agent    string
 }
 
+// ScenarioAll is the --scenario value that runs every pack under
+// bench/scenarios/, in name order.
+const ScenarioAll = "all"
+
 // Runner holds the resolved world one invocation operates in.
 type Runner struct {
 	opts     Options
 	out      printer
-	scn      *scenario.Scenario
+	scns     []*scenario.Scenario
+	scn      *scenario.Scenario // the scenario currently being run
 	benchDir string
 	repoRoot string
 	tc       *kube.Toolchain
@@ -74,13 +79,17 @@ func Run(ctx context.Context, opts Options, w io.Writer) error {
 		return fmt.Errorf("--runs is %d; must be at least 1", opts.Runs)
 	}
 
-	scnPath, benchDir, repoRoot, err := locate(opts.Scenario)
+	scnPaths, benchDir, repoRoot, err := locate(opts.Scenario)
 	if err != nil {
 		return err
 	}
-	scn, err := scenario.Load(scnPath)
-	if err != nil {
-		return err
+	scns := make([]*scenario.Scenario, 0, len(scnPaths))
+	for _, path := range scnPaths {
+		scn, err := scenario.Load(path)
+		if err != nil {
+			return err
+		}
+		scns = append(scns, scn)
 	}
 	tc, err := kube.NewToolchain(repoRoot, filepath.Join(benchDir, kubeconfigName))
 	if err != nil {
@@ -90,7 +99,7 @@ func Run(ctx context.Context, opts Options, w io.Writer) error {
 	r := &Runner{
 		opts:     opts,
 		out:      printer{w: w},
-		scn:      scn,
+		scns:     scns,
 		benchDir: benchDir,
 		repoRoot: repoRoot,
 		tc:       tc,
@@ -99,8 +108,12 @@ func Run(ctx context.Context, opts Options, w io.Writer) error {
 }
 
 func (r *Runner) run(ctx context.Context) error {
-	r.out.f("==> praxisbench run: scenario %q (runs=%d, agent=%s, keep=%v)",
-		r.scn.Name, r.opts.Runs, r.opts.Agent, r.opts.Keep)
+	names := make([]string, len(r.scns))
+	for i, scn := range r.scns {
+		names[i] = scn.Name
+	}
+	r.out.f("==> praxisbench run: scenarios %v (runs=%d each, agent=%s, keep=%v)",
+		names, r.opts.Runs, r.opts.Agent, r.opts.Keep)
 	r.out.f("    cluster %q · kubeconfig %s", KindClusterName, r.tc.Kubeconfig)
 
 	if err := r.phase(ctx, "ensure-cluster", func(ctx context.Context) error {
@@ -141,13 +154,16 @@ func (r *Runner) run(ctx context.Context) error {
 	}
 	r.c = c
 
-	outcomes := make([]outcome, 0, r.opts.Runs)
-	for i := range r.opts.Runs {
-		oc, err := r.runOnce(ctx, i+1)
-		if err != nil {
-			return fmt.Errorf("run %d/%d: %w", i+1, r.opts.Runs, err)
+	outcomes := make([]outcome, 0, len(r.scns)*r.opts.Runs)
+	for _, scn := range r.scns {
+		r.scn = scn
+		for i := range r.opts.Runs {
+			oc, err := r.runOnce(ctx, i+1)
+			if err != nil {
+				return fmt.Errorf("scenario %s run %d/%d: %w", scn.Name, i+1, r.opts.Runs, err)
+			}
+			outcomes = append(outcomes, oc)
 		}
-		outcomes = append(outcomes, oc)
 	}
 
 	r.printSummary(outcomes)
@@ -166,39 +182,76 @@ func (r *Runner) phase(ctx context.Context, name string, f func(context.Context)
 	return nil
 }
 
-// locate resolves the --scenario argument (a name under bench/scenarios/
-// or a path) plus the bench module directory and the repository root the
-// CRDs are installed from.
-func locate(scenarioArg string) (scnPath, benchDir, repoRoot string, err error) {
-	if info, statErr := os.Stat(scenarioArg); statErr == nil {
-		abs, absErr := filepath.Abs(scenarioArg)
-		if absErr != nil {
-			return "", "", "", fmt.Errorf("resolve --scenario path %q: %w", scenarioArg, absErr)
-		}
-		scnPath = abs
-		dir := abs
-		if !info.IsDir() {
-			dir = filepath.Dir(abs)
-		}
-		if benchDir, err = ascendToBenchDir(dir); err != nil {
-			return "", "", "", err
-		}
-	} else {
+// locate resolves the --scenario argument — "all", a name under
+// bench/scenarios/, or a path — into scenario paths, plus the bench module
+// directory and the repository root the CRDs are installed from.
+func locate(scenarioArg string) (scnPaths []string, benchDir, repoRoot string, err error) {
+	switch scenarioArg {
+	case ScenarioAll:
 		if benchDir, err = benchDirFromCWD(); err != nil {
-			return "", "", "", err
+			return nil, "", "", err
 		}
-		scnPath = filepath.Join(benchDir, "scenarios", scenarioArg)
-		if _, statErr := os.Stat(scnPath); statErr != nil {
-			return "", "", "", fmt.Errorf("no scenario named %q under %s — pass a name from bench/scenarios/ or a path to a scenario.yaml",
-				scenarioArg, filepath.Join(benchDir, "scenarios"))
+		if scnPaths, err = allScenarioPaths(benchDir); err != nil {
+			return nil, "", "", err
 		}
+	default:
+		var scnPath string
+		if info, statErr := os.Stat(scenarioArg); statErr == nil {
+			abs, absErr := filepath.Abs(scenarioArg)
+			if absErr != nil {
+				return nil, "", "", fmt.Errorf("resolve --scenario path %q: %w", scenarioArg, absErr)
+			}
+			scnPath = abs
+			dir := abs
+			if !info.IsDir() {
+				dir = filepath.Dir(abs)
+			}
+			if benchDir, err = ascendToBenchDir(dir); err != nil {
+				return nil, "", "", err
+			}
+		} else {
+			if benchDir, err = benchDirFromCWD(); err != nil {
+				return nil, "", "", err
+			}
+			scnPath = filepath.Join(benchDir, "scenarios", scenarioArg)
+			if _, statErr := os.Stat(scnPath); statErr != nil {
+				return nil, "", "", fmt.Errorf("no scenario named %q under %s — pass a name from bench/scenarios/, a path to a scenario.yaml, or %q",
+					scenarioArg, filepath.Join(benchDir, "scenarios"), ScenarioAll)
+			}
+		}
+		scnPaths = []string{scnPath}
 	}
 
 	repoRoot = filepath.Dir(benchDir)
 	if _, statErr := os.Stat(filepath.Join(repoRoot, "config", "crd", "bases")); statErr != nil {
-		return "", "", "", fmt.Errorf("%s has no config/crd/bases — the benchmark installs the praxis CRDs from the repository checkout and cannot run without it", repoRoot)
+		return nil, "", "", fmt.Errorf("%s has no config/crd/bases — the benchmark installs the praxis CRDs from the repository checkout and cannot run without it", repoRoot)
 	}
-	return scnPath, benchDir, repoRoot, nil
+	return scnPaths, benchDir, repoRoot, nil
+}
+
+// allScenarioPaths lists every pack directory under bench/scenarios/ in
+// name order. A pack literally named "all" would be unrunnable by name, so
+// it is rejected rather than silently shadowed.
+func allScenarioPaths(benchDir string) ([]string, error) {
+	scenariosDir := filepath.Join(benchDir, "scenarios")
+	entries, err := os.ReadDir(scenariosDir)
+	if err != nil {
+		return nil, fmt.Errorf("list scenarios under %s: %w", scenariosDir, err)
+	}
+	var paths []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if e.Name() == ScenarioAll {
+			return nil, fmt.Errorf("%s is a scenario directory, but %q is reserved for running every pack — rename it", filepath.Join(scenariosDir, e.Name()), ScenarioAll)
+		}
+		paths = append(paths, filepath.Join(scenariosDir, e.Name()))
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no scenario directories under %s", scenariosDir)
+	}
+	return paths, nil
 }
 
 // ascendToBenchDir walks up from start until it finds the bench module.
