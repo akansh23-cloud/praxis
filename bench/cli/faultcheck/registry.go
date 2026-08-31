@@ -12,5 +12,6 @@ package faultcheck
 var registry = map[string]Check{
 	"bad-image-tag":        badImageTag,
 	"oomkill-after-commit": oomkillAfterCommit,
+	"readiness-wrong-port": readinessWrongPort,
 	"smoke":                smokeInert,
 }

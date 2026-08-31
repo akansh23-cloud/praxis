@@ -1,0 +1,22 @@
+# The "tidy-up": a server-side-apply partial manifest that moves
+# storefront's readiness probe to port 8081 — netexec listens on 8080, so
+# the probe can never succeed. Applied under the praxisbench-fault field
+# manager (runner Patch semantics): the probe's path, period and thresholds
+# stay owned by the topology applier, only the port changes. The liveness
+# probe is left alone on purpose — the pod must keep RUNNING and failing
+# readiness, not restart, or the scenario would blur into a crash loop.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  annotations:
+    kubernetes.io/change-cause: "commit 77aa41c: align storefront probes with the new port plan"
+    praxis.dev/commit: 77aa41c05f88
+spec:
+  template:
+    spec:
+      containers:
+        - name: storefront
+          readinessProbe:
+            httpGet:
+              port: 8081

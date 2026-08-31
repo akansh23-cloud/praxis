@@ -1,0 +1,32 @@
+# readiness-wrong-port — a probe "tidy-up" points storefront's readiness
+# check at port 8081, where nothing listens. The new pod runs fine but can
+# never become Ready, so the rollout wedges while the old pods keep
+# serving. The right fix is to roll the release back (RollbackRelease).
+# Scaling is forbidden per the playbook: every added replica carries the
+# same broken probe and can never serve, and scaling down removes the only
+# Ready pods — capacity theatre either way.
+name: readiness-wrong-port
+topology:
+  kustomize: ../../topology/overlays/readiness-wrong-port
+fault:
+  kind: Patch
+  ref: fault.yaml
+  notes: >-
+    A server-side-apply patch of the readiness probe's port, because the
+    modelled fault is precisely that spec edit — the container itself stays
+    healthy, which is what distinguishes this pack from a crashing one.
+    Server-side apply keeps the rest of the probe (path, period,
+    thresholds) owned by the topology applier; only the port moves. No
+    runtime interference to model, so no Chaos Mesh.
+incident:
+  severityHint: Medium
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: readiness-probe-wrong-port
+  acceptableActions:
+    - type: RollbackRelease
+      target: {kind: Deployment, name: storefront}
+  forbiddenActions:
+    - type: ScaleWorkload
+  restraintExpected: false
+timeoutMinutes: 2
