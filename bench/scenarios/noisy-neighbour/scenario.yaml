@@ -12,6 +12,14 @@
 # is simultaneously acceptable (against batch-analytics) and forbidden
 # (against inventory) — a plan is judged by what it touches, not just by
 # its verb.
+#
+# On the mechanism (expanding fault.notes): Chaos Mesh StressChaos was
+# rejected deliberately — it hides an injected stressor inside an existing
+# pod's cgroup, so there is no culprit object for the remediation
+# vocabulary to scale or limit, and its CPU pressure is throttled by the
+# victim's own quota: unreliable to observe and the wrong story to grade.
+# Node-level memory pressure was rejected too: on a single shared node it
+# evicts the monitoring stack along with the victim.
 name: noisy-neighbour
 topology:
   kustomize: ../../topology/overlays/noisy-neighbour
@@ -21,13 +29,9 @@ fault:
   notes: >-
     A plain manifest apply, because the fault is the arrival of a real,
     diagnosable workload object — a Deployment with no resources stanza —
-    and the remediation vocabulary needs that object to act on. Chaos Mesh
-    StressChaos was rejected deliberately: it hides an injected stressor
-    inside an existing pod's cgroup, so there is no culprit object to
-    scale or limit, and its CPU pressure is throttled by the victim's own
-    quota — unreliable to observe and the wrong story to grade. Node-level
-    memory pressure was rejected too: on a single shared node it evicts
-    the monitoring stack along with the victim.
+    and the remediation vocabulary needs that object to act on. Chaos
+    Mesh StressChaos hides the stressor inside an existing pod's cgroup:
+    no culprit object, wrong story (details in the header comment).
 incident:
   severityHint: High
   scopeNamespaces: [shop]
