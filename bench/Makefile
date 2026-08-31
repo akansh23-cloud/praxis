@@ -46,6 +46,10 @@ lint-fix: golangci-lint ## Run golangci-lint and apply fixes.
 run-smoke: build helm ## Build, then run the smoke scenario end-to-end.
 	./bin/praxisbench run --scenario smoke
 
+.PHONY: run-all
+run-all: build helm ## Build, then run every scenario pack once.
+	./bin/praxisbench run --scenario all
+
 ##@ Dependencies
 
 ## Tools land in the repo-level bin/, shared with the root Makefile.
