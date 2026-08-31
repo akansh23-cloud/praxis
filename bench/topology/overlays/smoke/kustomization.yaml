@@ -1,0 +1,10 @@
+# smoke overlay — the base, untouched. The smoke scenario proves the
+# harness pipeline (deploy, verify healthy, inject, file Incident, wait,
+# tear down); it deliberately breaks nothing, so the overlay only stamps
+# which scenario deployed the objects.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: smoke

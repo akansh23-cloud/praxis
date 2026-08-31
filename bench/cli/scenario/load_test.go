@@ -131,6 +131,32 @@ func TestLoadValid(t *testing.T) {
 	}
 }
 
+// TestShippedScenariosLoad walks the real packs under bench/scenarios/ so a
+// pack that drifts from the schema fails `make test` before it fails a run.
+func TestShippedScenariosLoad(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "scenarios"))
+	if err != nil {
+		t.Fatalf("read bench/scenarios: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("bench/scenarios is empty; at least the smoke pack must exist")
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		t.Run(e.Name(), func(t *testing.T) {
+			s, err := Load(filepath.Join("..", "..", "scenarios", e.Name()))
+			if err != nil {
+				t.Fatalf("shipped scenario does not validate: %v", err)
+			}
+			if s.Name != e.Name() {
+				t.Errorf("Name = %q, want %q", s.Name, e.Name())
+			}
+		})
+	}
+}
+
 func TestLoadRejects(t *testing.T) {
 	cases := []struct {
 		name string

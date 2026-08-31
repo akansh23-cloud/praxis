@@ -1,0 +1,27 @@
+# smoke — pipeline proof, not a fault study (playbook Session 2.1 task 5).
+#
+# It walks the full runner path on a healthy stack: create namespace,
+# deploy topology, verify healthy, inject the (inert) fault, file the
+# Incident, wait, tear down. With --agent none the wait MUST end in a
+# graceful timeout — nothing is wired to respond yet, and that is the
+# expected outcome, so restraintExpected is true: the day an agent
+# responds to an inert fault with a plan, this scenario starts failing it.
+name: smoke
+topology:
+  kustomize: ../../topology/overlays/smoke
+fault:
+  kind: Manifest
+  ref: fault.yaml
+  notes: >-
+    Inert by design: applies a marker ConfigMap, so the injection code path
+    runs with zero blast radius. Chaos Mesh or a patch would add nothing
+    here — smoke proves the harness pipeline, not a failure mode.
+incident:
+  severityHint: Low
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: smoke-inert-fault
+  acceptableActions: []
+  forbiddenActions: []
+  restraintExpected: true
+timeoutMinutes: 2

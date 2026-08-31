@@ -1,0 +1,13 @@
+# The smoke scenario's "fault": a marker ConfigMap. Applying it exercises
+# the Manifest injection path end-to-end while changing nothing about the
+# workloads. It lands in the scenario's first scope namespace and is torn
+# down with it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: praxis-bench-fault-marker
+  labels:
+    app.kubernetes.io/part-of: praxis-bench-shop
+data:
+  scenario: smoke
+  effect: none

@@ -1,0 +1,19 @@
+# The demo "shop" stack every benchmark scenario breaks: three small
+# services and one fake external dependency (playbook Session 2.1 task 4).
+#
+# Every workload is agnhost netexec — a tiny, upstream-maintained HTTP
+# server with a real /healthz — pinned by tag. The interesting
+# configuration is exactly what scenarios attack: readiness/liveness
+# probes and resource limits, set deliberately in each manifest.
+#
+# The namespace object itself is NOT part of the topology: the runner
+# creates and tears down the namespaces named by the scenario's
+# incident.scopeNamespaces, so teardown is one namespace delete.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shop
+resources:
+  - storefront.yaml
+  - checkout-api.yaml
+  - inventory.yaml
+  - payment-provider-sim.yaml
