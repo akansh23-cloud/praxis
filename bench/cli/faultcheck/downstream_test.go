@@ -72,23 +72,39 @@ func TestChaosAllInjected(t *testing.T) {
 	}
 }
 
-func TestDialShowsConnectivity(t *testing.T) {
+func TestClassifyConnect(t *testing.T) {
 	cases := []struct {
-		name string
-		body string
-		want bool
+		name       string
+		output     string
+		failed     bool
+		want       bool
+		wantStatus string
 	}{
-		{name: "healthy dial", body: `{"responses":["ok"]}`, want: true},
-		{name: "no responses", body: `{"responses":[]}`, want: false},
-		{name: "empty object", body: `{}`, want: false},
-		{name: "errors alongside responses", body: `{"responses":["ok"],"errors":["timeout"]}`, want: false},
-		{name: "errors only", body: `{"errors":["dial tcp: i/o timeout"]}`, want: false},
-		{name: "not JSON", body: `<html>bad gateway</html>`, want: false},
+		{
+			name: "connect succeeded", output: "", failed: false,
+			want: false, wantStatus: "still reaches",
+		},
+		{
+			name: "partition timeout", output: "TIMEOUT\n", failed: true,
+			want: true, wantStatus: "timed out",
+		},
+		{
+			name: "refused is a different problem", output: "REFUSED\n", failed: true,
+			want: false, wantStatus: "not with the partition's TIMEOUT signature",
+		},
+		{
+			name: "dns failure is a different problem", output: "OTHER: lookup no-such-host failed\n", failed: true,
+			want: false, wantStatus: "not with the partition's TIMEOUT signature",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := dialShowsConnectivity([]byte(tc.body)); got != tc.want {
-				t.Errorf("dialShowsConnectivity(%s) = %v, want %v", tc.body, got, tc.want)
+			got, status := classifyConnect(tc.output, tc.failed)
+			if got != tc.want {
+				t.Errorf("classifyConnect(%q, %v) = %v, want %v", tc.output, tc.failed, got, tc.want)
+			}
+			if !strings.Contains(status, tc.wantStatus) {
+				t.Errorf("classifyConnect() status %q does not contain %q", status, tc.wantStatus)
 			}
 		})
 	}

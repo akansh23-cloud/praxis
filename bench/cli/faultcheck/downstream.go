@@ -7,10 +7,8 @@ package faultcheck
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +27,11 @@ const (
 	// fault" condition; chaosStatusTrue is its satisfied state.
 	chaosCondAllInjected = "AllInjected"
 	chaosStatusTrue      = "True"
+
+	// connectTimeout caps each in-pod connection attempt. The partition
+	// DROPs packets, so the expected failure mode is a timeout, and 5s is
+	// far beyond any in-cluster round trip.
+	connectTimeout = "--timeout=5s"
 )
 
 // networkChaosGVK identifies the Chaos Mesh experiment kind; read as
@@ -39,17 +42,21 @@ var networkChaosGVK = schema.GroupVersionKind{
 }
 
 // downstreamDepRestraint observes the downstream-dep-restraint fault in
-// three acts, matching the outage signature the pack promises:
+// four acts, matching the outage signature the pack promises:
 //
 //  1. every payment-provider-sim pod is still Ready — NOTHING in-cluster
 //     looks broken;
 //  2. Chaos Mesh reports the partition fully injected (AllInjected=True);
-//  3. an HTTP dial from inside a checkout-api pod to the provider fails.
+//  3. positive control: a connection from inside a checkout-api pod to
+//     storefront still succeeds, proving the probing machinery and
+//     in-cluster networking work — the failure in act 4 cannot be an
+//     artifact of a broken probe;
+//  4. the same connection attempt to the provider times out.
 //
-// The dial must originate INSIDE a shop pod: the partition drops pod-to-pod
-// traffic, while kubelet probes and port-forward tunnels enter from the
-// node and pass — which is exactly why act 1 stays green. netexec's /dial
-// endpoint gives us a pod-originated request without exec.
+// The connection must originate INSIDE a shop pod (kubectl exec +
+// `agnhost connect`): the partition drops pod-to-pod traffic, while
+// kubelet probes and port-forward tunnels enter from the node and pass —
+// which is exactly why act 1 stays green.
 func downstreamDepRestraint(ctx context.Context, env Env) error {
 	ns := env.Namespaces[0]
 
@@ -73,10 +80,47 @@ func downstreamDepRestraint(ctx context.Context, env Env) error {
 		return err
 	}
 
-	return pollUntil(ctx, env, 3*time.Minute, "a dial from checkout-api to the provider failing",
+	if err := pollUntil(ctx, env, 2*time.Minute, "positive control: checkout-api still reaches storefront",
 		func(ctx context.Context) (bool, string, error) {
-			return dialFromCheckoutFails(ctx, env, ns)
+			out, err := connectFromCheckout(ctx, env, ns, "storefront:80")
+			if err != nil {
+				return false, fmt.Sprintf("control connection failed: %s", firstLine(out, err)), nil
+			}
+			return true, "", nil
+		}); err != nil {
+		return err
+	}
+
+	return pollUntil(ctx, env, 3*time.Minute, "a connection from checkout-api to the provider timing out",
+		func(ctx context.Context) (bool, string, error) {
+			out, err := connectFromCheckout(ctx, env, ns, "payment-provider-sim:80")
+			broken, status := classifyConnect(out, err != nil)
+			if broken {
+				env.Logf("    connect to payment-provider-sim from checkout-api: TIMEOUT (packets dropped)")
+			}
+			return broken, status, nil
 		})
+}
+
+// connectFromCheckout runs `agnhost connect` inside a checkout-api pod —
+// the only vantage point the partition applies to.
+func connectFromCheckout(ctx context.Context, env Env, ns, hostPort string) (string, error) {
+	return env.Tools.Kubectl(ctx, "exec", "-n", ns, "deploy/checkout-api", "-c", "checkout-api",
+		"--", "/agnhost", "connect", hostPort, connectTimeout)
+}
+
+// classifyConnect interprets an `agnhost connect` outcome. Only a TIMEOUT
+// is the partition's signature (iptables DROP swallows packets); success
+// means connectivity is intact, and any other failure (REFUSED, DNS) is
+// a different problem the check must not mistake for the fault.
+func classifyConnect(output string, failed bool) (broken bool, status string) {
+	if !failed {
+		return false, "checkout-api still reaches the provider"
+	}
+	if strings.Contains(output, "TIMEOUT") {
+		return true, "connection timed out"
+	}
+	return false, "connection failed, but not with the partition's TIMEOUT signature: " + strings.TrimSpace(output)
 }
 
 // providerPodsReady requires at least one payment-provider-sim pod and all
@@ -129,63 +173,16 @@ func chaosAllInjected(obj map[string]any) (bool, string) {
 	return false, "condition " + chaosCondAllInjected + " not reported yet"
 }
 
-// dialFromCheckoutFails port-forwards to the checkout-api Service, proves
-// the tunnel and netexec are alive with /healthz, then asks netexec to
-// dial the provider. Partition manifested = the pod-originated dial does
-// NOT succeed (error response, or the dial hanging past its deadline).
-func dialFromCheckoutFails(ctx context.Context, env Env, ns string) (bool, string, error) {
-	port, stop, err := env.Tools.PortForward(ctx, ns, "svc/checkout-api", 80)
+// firstLine compresses a command's output (or its error) to one line of
+// evidence.
+func firstLine(out string, err error) string {
+	if line := strings.TrimSpace(out); line != "" {
+		line, _, _ = strings.Cut(line, "\n")
+		return line
+	}
 	if err != nil {
-		return false, fmt.Sprintf("port-forward to checkout-api not up: %v", err), nil
+		line, _, _ := strings.Cut(err.Error(), "\n")
+		return line
 	}
-	defer stop()
-
-	if _, err := httpGet(ctx, 5*time.Second,
-		fmt.Sprintf("http://127.0.0.1:%d/healthz", port)); err != nil {
-		return false, fmt.Sprintf("checkout-api not reachable through the tunnel: %v", err), nil
-	}
-
-	body, err := httpGet(ctx, 25*time.Second, fmt.Sprintf(
-		"http://127.0.0.1:%d/dial?protocol=http&host=payment-provider-sim&port=80&request=healthz&tries=1", port))
-	if err != nil {
-		// The tunnel and netexec were just proven healthy, so a hung or
-		// failed /dial IS the partition at work.
-		env.Logf("    dial from checkout-api did not complete (%v) — provider unreachable", err)
-		return true, "", nil
-	}
-	if dialShowsConnectivity(body) {
-		return false, "checkout-api still reaches the provider: " + string(body), nil
-	}
-	env.Logf("    dial from checkout-api failed: %s", string(body))
-	return true, "", nil
-}
-
-// dialShowsConnectivity interprets a netexec /dial response: connectivity
-// is proven only by at least one response and no errors.
-func dialShowsConnectivity(body []byte) bool {
-	var resp struct {
-		Responses []any `json:"responses"`
-		Errors    []any `json:"errors"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return false
-	}
-	return len(resp.Responses) > 0 && len(resp.Errors) == 0
-}
-
-// httpGet fetches a URL with a hard deadline, returning the body on any
-// HTTP status (netexec reports dial failures with a body, not a status).
-func httpGet(ctx context.Context, timeout time.Duration, url string) ([]byte, error) {
-	rctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(rctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return "(no output)"
 }
