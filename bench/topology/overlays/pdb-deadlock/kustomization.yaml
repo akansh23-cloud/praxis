@@ -1,0 +1,10 @@
+# pdb-deadlock overlay — the base shop, untouched. The deadlocking
+# PodDisruptionBudget arrives as the fault, not as topology: pre-fault the
+# stack must be the healthy baseline, and the PDB is the one change whose
+# effect the scenario studies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: pdb-deadlock

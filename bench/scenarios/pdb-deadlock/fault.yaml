@@ -1,0 +1,16 @@
+# The deadlock: minAvailable 3 over a 2-replica Deployment. currentHealthy
+# (2) can never reach desiredHealthy (3), so the disruption controller pins
+# status.disruptionsAllowed at 0 with condition DisruptionAllowed=False,
+# reason InsufficientPods — permanently, by arithmetic alone.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: storefront-pdb
+  annotations:
+    kubernetes.io/change-cause: "commit c9d02e7: guarantee storefront capacity during maintenance"
+    praxis.dev/commit: c9d02e70a4b1
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: storefront

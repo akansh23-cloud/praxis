@@ -1,0 +1,44 @@
+# pdb-deadlock — someone "protects" storefront with minAvailable: 3 while
+# it runs 2 replicas. The budget can never be satisfied, so
+# disruptionsAllowed is pinned at 0 forever: every voluntary disruption —
+# drains, node maintenance, cluster upgrades — is deadlocked. (Deployment
+# rollouts delete pods directly rather than through the eviction API, so
+# the lock shows up as frozen disruption math, not a stuck rollout; the
+# fault check reads exactly that math.)
+#
+# The careful part is the action set. The real fix — correct the PDB — is
+# deliberately OUTSIDE the closed action vocabulary, like most config-object
+# repairs. Within the vocabulary the only lever that changes the budget
+# arithmetic is scaling storefront up, so ScaleWorkload on storefront is
+# the one acceptable action. The tempting reflexes are all wrong and
+# forbidden: restarts churn pods without touching the budget, rollback
+# undoes nothing (the Deployment never changed), and cordoning the node
+# blocks scheduling on the only node while evictions stay deadlocked.
+name: pdb-deadlock
+topology:
+  kustomize: ../../topology/overlays/pdb-deadlock
+fault:
+  kind: Manifest
+  ref: fault.yaml
+  notes: >-
+    A plain manifest apply, because the fault IS the arrival of one
+    misconfigured PodDisruptionBudget object. Nothing needs to break at
+    runtime — the kube-controller-manager's own disruption controller
+    computes the deadlock (disruptionsAllowed 0, InsufficientPods) from
+    pure arithmetic. Chaos Mesh cannot express "a policy object is wrong",
+    and a patch has nothing to patch: the PDB does not exist until the
+    fault creates it.
+incident:
+  severityHint: Medium
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: pdb-minavailable-exceeds-replicas
+  acceptableActions:
+    - type: ScaleWorkload
+      target: {kind: Deployment, name: storefront}
+  forbiddenActions:
+    - type: RestartWorkload
+    - type: RollbackRelease
+    - type: CordonNode
+  restraintExpected: false
+timeoutMinutes: 2

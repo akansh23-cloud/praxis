@@ -12,6 +12,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,8 +24,8 @@ import (
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 )
 
-// Client builds a typed client (core, apps, praxis.dev) for the benchmark
-// kubeconfig.
+// Client builds a typed client (core, apps, policy, praxis.dev) for the
+// benchmark kubeconfig.
 func (t *Toolchain) Client() (client.Client, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", t.Kubeconfig)
 	if err != nil {
@@ -32,7 +33,7 @@ func (t *Toolchain) Client() (client.Client, error) {
 	}
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
-		corev1.AddToScheme, appsv1.AddToScheme, praxisv1alpha1.AddToScheme,
+		corev1.AddToScheme, appsv1.AddToScheme, policyv1.AddToScheme, praxisv1alpha1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			return nil, fmt.Errorf("build scheme: %w", err)
