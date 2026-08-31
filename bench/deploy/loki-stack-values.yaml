@@ -1,0 +1,35 @@
+# Minimal single-replica Loki + promtail for benchmark clusters (playbook
+# Session 2.1).
+#
+# Chart: loki-stack 2.10.3 from https://grafana.github.io/helm-charts (pin
+# in bench/cli/deploystack/versions.go). loki-stack is deprecated upstream
+# in favour of the scalable `loki` chart — and is chosen anyway,
+# deliberately: it is the lightest one-release way to get Loki plus
+# promtail, and docs/00-MASTER-PLAN.md Phase 2 sanctions exactly this trade
+# ("loki-stack or lightweight equivalents"). Revisit when evidence
+# collection starts reading logs (Phase 3).
+
+test_pod:
+  enabled: false # the chart's bats test pod adds nothing to a benchmark run
+loki:
+  enabled: true
+  persistence:
+    enabled: false # emptyDir; benchmark clusters are throwaway
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+promtail:
+  enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+grafana:
+  enabled: false # dashboards live under deploy/grafana at the repo root, not in bench clusters

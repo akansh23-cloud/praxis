@@ -1,0 +1,35 @@
+# Chaos Mesh sized for a laptop kind cluster (playbook Session 2.1).
+#
+# Chart: chaos-mesh 2.8.4 from https://charts.chaos-mesh.org (pin in
+# bench/cli/deploystack/versions.go).
+#
+# kind nodes run containerd, not docker; with the chart's default docker
+# socket every PodChaos experiment would fail silently at injection time,
+# which is the classic Chaos-Mesh-on-kind quirk docs/00-MASTER-PLAN.md
+# Phase 2 warns about. The two runtime lines below are the fix.
+
+controllerManager:
+  replicaCount: 1 # chart default is 3; one is plenty for one throwaway cluster
+  leaderElection:
+    enabled: false # single replica — election only adds startup latency
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+chaosDaemon:
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+dashboard:
+  create: false # headless benchmark; the CLI is the interface
+dnsServer:
+  create: false # no DNSChaos in the Phase 2 scenario set

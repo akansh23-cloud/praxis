@@ -1,0 +1,43 @@
+# Minimal single-replica Prometheus for benchmark clusters (playbook
+# Session 2.1). Sized for a laptop kind cluster: one scenario's whole
+# footprint — this stack plus the shop topology — must fit in 4 GiB RAM.
+#
+# Chart: prometheus 29.27.0 from
+# https://prometheus-community.github.io/helm-charts. The pin lives in
+# bench/cli/deploystack/versions.go — the single place every version lives;
+# this file only shapes the install.
+#
+# Benchmark clusters are throwaway, so nothing persists and retention is
+# short. The scrape interval is 15s so scenario predicates (fixPredicate /
+# harmPredicate, evaluated from Phase 5 on) see a fault quickly.
+
+alertmanager:
+  enabled: false # praxisbench files Incidents itself; no alert routing here
+prometheus-pushgateway:
+  enabled: false # nothing pushes metrics
+prometheus-node-exporter:
+  enabled: false # node metrics are not scenario signals; saves a hostPath pod
+kube-state-metrics:
+  enabled: true # workload-state metrics are exactly what scenario predicates read
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 96Mi
+server:
+  replicaCount: 1
+  retention: 2h
+  persistentVolume:
+    enabled: false # emptyDir; a bench cluster outliving its data is a bug
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
