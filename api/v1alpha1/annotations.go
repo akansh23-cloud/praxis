@@ -21,3 +21,16 @@ const (
 	// copies it into status.approval.approvedBy when the approval verifies.
 	AnnotationApprovedBy = "praxis.dev/approved-by"
 )
+
+// The restraint contract (docs/00-MASTER-PLAN.md FR-P2-03, LLD §17): for
+// some incidents the only correct remediation is none at all.
+const (
+	// AnnotationNoActionProposed on an Incident declares that analysis
+	// concluded no remediation should be attempted. Restraint is a
+	// first-class outcome, not a failure: the benchmark waits for either a
+	// RemediationPlan or this annotation, and scores restraint correctness
+	// against the scenario's ground truth. The value is a short
+	// human-readable reason. Written by agents (Session 2.3 onward); the
+	// benchmark only ever reads it.
+	AnnotationNoActionProposed = "praxis.dev/no-action-proposed"
+)
