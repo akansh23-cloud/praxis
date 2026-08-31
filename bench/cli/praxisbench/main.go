@@ -18,6 +18,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akansh23-cloud/praxis/bench/cli/runner"
 )
 
 func main() {
@@ -45,25 +47,20 @@ func newRootCmd() *cobra.Command {
 }
 
 func newRunCmd() *cobra.Command {
-	var opts struct {
-		scenario string
-		runs     int
-		keep     bool
-		agent    string
-	}
+	var opts runner.Options
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a scenario end-to-end against the praxis-bench kind cluster",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return errors.New("run: the pipeline is not wired yet (it lands later in Session 2.1)")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runner.Run(cmd.Context(), opts, cmd.OutOrStdout())
 		},
 	}
-	cmd.Flags().StringVar(&opts.scenario, "scenario", "",
+	cmd.Flags().StringVar(&opts.Scenario, "scenario", "",
 		"scenario to run: a name under bench/scenarios/ or a path to a scenario.yaml (required)")
-	cmd.Flags().IntVar(&opts.runs, "runs", 1, "number of times to run the scenario")
-	cmd.Flags().BoolVar(&opts.keep, "keep", false,
+	cmd.Flags().IntVar(&opts.Runs, "runs", 1, "number of times to run the scenario")
+	cmd.Flags().BoolVar(&opts.Keep, "keep", false,
 		"keep the scenario namespaces and Incident after the run instead of tearing them down")
-	cmd.Flags().StringVar(&opts.agent, "agent", "none",
+	cmd.Flags().StringVar(&opts.Agent, "agent", runner.AgentNone,
 		`agent expected to respond; only "none" exists until the scorer session adds the rule-based baseline`)
 	_ = cmd.MarkFlagRequired("scenario")
 	return cmd
