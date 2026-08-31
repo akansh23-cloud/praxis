@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -20,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akansh23-cloud/praxis/bench/cli/runner"
+	"github.com/akansh23-cloud/praxis/bench/cli/scoring"
 )
 
 func main() {
@@ -61,29 +61,77 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Keep, "keep", false,
 		"keep the scenario namespaces and Incident after the run instead of tearing them down")
 	cmd.Flags().StringVar(&opts.Agent, "agent", runner.AgentNone,
-		`agent expected to respond; only "none" exists until the scorer session adds the rule-based baseline`)
+		`agent driven through the seam: "none" (nothing responds; the wait times out gracefully) or "rulebased" (the intentionally dumb baseline)`)
+	cmd.Flags().StringVar(&opts.ResultsDir, "results-dir", "",
+		"directory for this invocation's scored JSONL run records (default bench/results/)")
 	_ = cmd.MarkFlagRequired("scenario")
 	return cmd
 }
 
 func newScoreCmd() *cobra.Command {
-	return &cobra.Command{
+	var input, output, scenariosDir string
+	cmd := &cobra.Command{
 		Use:   "score",
-		Short: "Score recorded runs against a scenario's ground truth (Session 2.3)",
+		Short: "Re-score recorded runs against the scenario answer keys",
+		Long: "score re-referees existing run records: every record's metrics are recomputed\n" +
+			"from its raw observations (hypotheses, plan, response) against the groundTruth\n" +
+			"of the named scenarios — the path for re-scoring after an answer-key fix.\n" +
+			"`run` already scores as it records, so this is only needed to re-referee.",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return errors.New("score is not implemented yet: the scorer and its JSONL output arrive with " +
-				"Session 2.3 (docs/03-CLAUDE-CODE-PLAYBOOK.md); until then `run` reports outcomes on stdout only")
+			records, err := scoring.ReadRecords(input)
+			if err != nil {
+				return err
+			}
+			if scenariosDir == "" {
+				if scenariosDir, err = runner.ScenariosDir(); err != nil {
+					return err
+				}
+			}
+			if err := scoring.Rescore(records, scenariosDir); err != nil {
+				return err
+			}
+			out := os.Stdout
+			if output != "-" {
+				f, err := os.Create(output)
+				if err != nil {
+					return fmt.Errorf("create %s: %w", output, err)
+				}
+				defer f.Close() //nolint:errcheck // flushed by the loop's checked writes
+				out = f
+			}
+			for i := range records {
+				if err := scoring.AppendRecord(out, &records[i]); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&input, "input", "", "run-record JSONL file, or a directory of them (required)")
+	cmd.Flags().StringVar(&output, "output", "-", `where to write the re-scored JSONL ("-" for stdout)`)
+	cmd.Flags().StringVar(&scenariosDir, "scenarios-dir", "", "answer-key location (default bench/scenarios/)")
+	_ = cmd.MarkFlagRequired("input")
+	return cmd
 }
 
 func newReportCmd() *cobra.Command {
-	return &cobra.Command{
+	var input string
+	cmd := &cobra.Command{
 		Use:   "report",
-		Short: "Aggregate scores over N runs into a summary (Session 2.3)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return errors.New("report is not implemented yet: aggregate reporting (mean/min/max over N runs) " +
-				"arrives with Session 2.3 alongside the scorer")
+		Short: "Aggregate scored run records into the mean/min/max table",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			records, err := scoring.ReadRecords(input)
+			if err != nil {
+				return err
+			}
+			aggs, err := scoring.AggregateRecords(records)
+			if err != nil {
+				return err
+			}
+			return scoring.RenderReport(cmd.OutOrStdout(), aggs)
 		},
 	}
+	cmd.Flags().StringVar(&input, "input", "", "run-record JSONL file, or a directory of them (required)")
+	_ = cmd.MarkFlagRequired("input")
+	return cmd
 }

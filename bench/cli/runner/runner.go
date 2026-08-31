@@ -21,10 +21,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/akansh23-cloud/praxis/bench/cli/deploystack"
 	"github.com/akansh23-cloud/praxis/bench/cli/kube"
 	"github.com/akansh23-cloud/praxis/bench/cli/scenario"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"github.com/akansh23-cloud/praxis/bench/cli/scoring"
+	"github.com/akansh23-cloud/praxis/internal/agents"
+	"github.com/akansh23-cloud/praxis/internal/agents/rulebased"
 )
 
 const (
@@ -37,6 +41,10 @@ const (
 	// AgentNone means nothing is wired to respond; the wait must end in a
 	// graceful timeout (or a restraint annotation placed by hand).
 	AgentNone = "none"
+
+	// AgentRuleBased is the intentionally dumb baseline of FR-P2-04,
+	// driven in-process through the Agent seam (internal/agents).
+	AgentRuleBased = "rulebased"
 
 	// kubeconfigName is the benchmark-owned kubeconfig inside bench/,
 	// covered by the repository's *.kubeconfig gitignore rule. Keeping it
@@ -51,6 +59,24 @@ type Options struct {
 	Runs     int
 	Keep     bool
 	Agent    string
+
+	// ResultsDir receives one JSONL file of scored run records per
+	// invocation; empty means <bench>/results.
+	ResultsDir string
+}
+
+// agentFor maps the --agent flag to a seam implementation; nil means
+// nothing responds (the Session 2.1/2.2 behavior, unchanged).
+func agentFor(name string) (agents.Agent, error) {
+	switch name {
+	case AgentNone:
+		return nil, nil
+	case AgentRuleBased:
+		return rulebased.New(), nil
+	default:
+		return nil, fmt.Errorf("unknown agent %q: available agents are %q and %q (the LLM agent arrives in Phase 3)",
+			name, AgentNone, AgentRuleBased)
+	}
 }
 
 // ScenarioAll is the --scenario value that runs every pack under
@@ -68,12 +94,18 @@ type Runner struct {
 	tc       *kube.Toolchain
 	c        client.Client
 	timings  []timing
+
+	agent       agents.Agent // nil for --agent none
+	resultsFile *os.File
+	resultsPath string
+	records     []scoring.Record
 }
 
 // Run executes `praxisbench run`.
 func Run(ctx context.Context, opts Options, w io.Writer) error {
-	if opts.Agent != AgentNone {
-		return fmt.Errorf("unknown agent %q: only %q exists yet — the rule-based baseline arrives with the scorer session (playbook 2.3)", opts.Agent, AgentNone)
+	ag, err := agentFor(opts.Agent)
+	if err != nil {
+		return err
 	}
 	if opts.Runs < 1 {
 		return fmt.Errorf("--runs is %d; must be at least 1", opts.Runs)
@@ -103,8 +135,41 @@ func Run(ctx context.Context, opts Options, w io.Writer) error {
 		benchDir: benchDir,
 		repoRoot: repoRoot,
 		tc:       tc,
+		agent:    ag,
 	}
+	if err := r.openResults(); err != nil {
+		return err
+	}
+	defer r.closeResults()
 	return r.run(ctx)
+}
+
+// openResults creates this invocation's JSONL record file up front, so a
+// run that dies mid-suite still leaves the completed runs' records behind.
+func (r *Runner) openResults() error {
+	dir := r.opts.ResultsDir
+	if dir == "" {
+		dir = filepath.Join(r.benchDir, "results")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create results directory %s: %w", dir, err)
+	}
+	r.resultsPath = filepath.Join(dir,
+		fmt.Sprintf("run-%s-%s.jsonl", time.Now().UTC().Format("20060102-150405"), r.opts.Agent))
+	f, err := os.OpenFile(r.resultsPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("create results file: %w", err)
+	}
+	r.resultsFile = f
+	return nil
+}
+
+func (r *Runner) closeResults() {
+	if r.resultsFile != nil {
+		if err := r.resultsFile.Close(); err != nil {
+			r.out.f("    warning: closing %s: %v", r.resultsPath, err)
+		}
+	}
 }
 
 func (r *Runner) run(ctx context.Context) error {
@@ -115,6 +180,7 @@ func (r *Runner) run(ctx context.Context) error {
 	r.out.f("==> praxisbench run: scenarios %v (runs=%d each, agent=%s, keep=%v)",
 		names, r.opts.Runs, r.opts.Agent, r.opts.Keep)
 	r.out.f("    cluster %q · kubeconfig %s", KindClusterName, r.tc.Kubeconfig)
+	r.out.f("    run records → %s", r.resultsPath)
 
 	if err := r.phase(ctx, "ensure-cluster", func(ctx context.Context) error {
 		created, err := r.tc.EnsureKindCluster(ctx, KindClusterName, deploystack.KindNodeImage)
@@ -167,7 +233,26 @@ func (r *Runner) run(ctx context.Context) error {
 	}
 
 	r.printSummary(outcomes)
+	if err := r.printReport(); err != nil {
+		return err
+	}
+	r.out.f("")
+	r.out.f("==> run records: %s (praxisbench report --input %s re-renders the table)", r.resultsPath, r.resultsPath)
 	return nil
+}
+
+// printReport renders the aggregate score table for the records this
+// invocation produced.
+func (r *Runner) printReport() error {
+	if len(r.records) == 0 {
+		return nil
+	}
+	aggs, err := scoring.AggregateRecords(r.records)
+	if err != nil {
+		return err
+	}
+	r.out.f("")
+	return scoring.RenderReport(r.out.w, aggs)
 }
 
 // phase times one named pipeline step and prints its banner.
@@ -266,6 +351,16 @@ func ascendToBenchDir(start string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// ScenariosDir resolves bench/scenarios from the working directory — the
+// default answer-key location for `praxisbench score`.
+func ScenariosDir() (string, error) {
+	benchDir, err := benchDirFromCWD()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(benchDir, "scenarios"), nil
 }
 
 // benchDirFromCWD finds the bench module from the working directory, which

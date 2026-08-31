@@ -7,6 +7,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -18,32 +19,32 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
+	"github.com/akansh23-cloud/praxis/bench/cli/agentrun"
 	"github.com/akansh23-cloud/praxis/bench/cli/faultcheck"
 	"github.com/akansh23-cloud/praxis/bench/cli/kube"
 	"github.com/akansh23-cloud/praxis/bench/cli/scenario"
+	"github.com/akansh23-cloud/praxis/bench/cli/scoring"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
 )
 
-// responseKind classifies what (if anything) answered the Incident.
-type responseKind string
-
-const (
-	// ResponsePlan means a RemediationPlan referencing the Incident appeared.
-	ResponsePlan responseKind = "PlanProposed"
-	// ResponseNoAction means the restraint annotation appeared on the Incident.
-	ResponseNoAction responseKind = "NoActionProposed"
-	// ResponseTimeout means the wait ended with neither — expected with --agent none.
-	ResponseTimeout responseKind = "NoResponse"
-)
-
-// response is the observed answer to one filed Incident.
+// response is the observed answer to one filed Incident. Kinds are the
+// scorer's vocabulary (scoring.ResponseKind), because what the runner
+// observes here is exactly what gets scored.
 type response struct {
-	Kind   responseKind
+	Kind   scoring.ResponseKind
 	Detail string
 	Waited time.Duration
+
+	// Plan is the RemediationPlan as read from the cluster — the scored
+	// artifact is what the API server accepted, not what the agent
+	// returned in memory.
+	Plan *praxisv1alpha1.RemediationPlan
+
+	// NoActionReason is the restraint annotation's value, when present.
+	NoActionReason string
 }
 
-// outcome is the record of one run. The scorer session (2.3) turns these
-// into JSONL; until then they are printed.
+// outcome is the record of one run.
 type outcome struct {
 	Scenario string
 	Run      int
@@ -124,11 +125,47 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 	}); err != nil {
 		return oc, err
 	}
+	filedAt := time.Now()
 
-	if err := r.phase(ctx, label+"await-response", func(ctx context.Context) error {
+	// With an agent wired, drive it through the seam now: it persists its
+	// verdict into the cluster (plan CR or no-action annotation), and the
+	// await phase below then OBSERVES that verdict like it would observe
+	// any external agent's — the cluster stays the single source of truth.
+	var agentReport *agentrun.Report
+	if r.agent != nil {
+		if err := r.phase(ctx, label+"agent-respond", func(ctx context.Context) error {
+			var err error
+			agentReport, err = agentrun.Respond(ctx, r.c, r.agent, inc, r.out.f)
+			if err != nil {
+				return err
+			}
+			return assertScenarioBlind(r.scn, agentReport)
+		}); err != nil {
+			return oc, err
+		}
+	}
+
+	if agentReport != nil && agentReport.PlanCreateError != "" {
+		// The agent answered and the API server refused the plan: that IS
+		// the run's outcome; there is nothing left to wait for.
+		oc.Response = response{
+			Kind:   scoring.ResponsePlanInvalid,
+			Detail: "API server rejected the proposed plan",
+			Waited: time.Since(filedAt),
+		}
+	} else if err := r.phase(ctx, label+"await-response", func(ctx context.Context) error {
 		var err error
-		oc.Response, err = r.awaitResponse(ctx, inc)
+		oc.Response, err = r.awaitResponse(ctx, inc, filedAt)
 		return err
+	}); err != nil {
+		return oc, err
+	}
+
+	// Score before teardown, but never at the cost of teardown: an error
+	// here returns through the deferred cleanup above, so a scorer
+	// failure cannot leak namespaces or benchmark resources.
+	if err := r.phase(ctx, label+"score", func(context.Context) error {
+		return r.recordRun(n, filedAt, inc, agentReport, oc.Response)
 	}); err != nil {
 		return oc, err
 	}
@@ -228,25 +265,30 @@ const labelBenchScenario = "praxis.dev/bench-scenario"
 const neutralDescription = "Synthetic incident filed by the praxis benchmark harness: service degradation " +
 	"observed; the scope namespaces are the boundary for any remediation."
 
-// fileIncident creates the synthetic Incident the scenario prescribes.
-// Its name and spec carry no scenario identity (see neutralDescription).
-func (r *Runner) fileIncident(ctx context.Context, n int) (*praxisv1alpha1.Incident, error) {
-	name := fmt.Sprintf("bench-%s-r%d", time.Now().UTC().Format("20060102-150405"), n)
-	inc := &praxisv1alpha1.Incident{
+// buildIncident constructs the synthetic Incident a scenario prescribes —
+// pure, so the leak tests exercise the exact construction the runner uses.
+func buildIncident(scn *scenario.Scenario, n int, now time.Time) *praxisv1alpha1.Incident {
+	return &praxisv1alpha1.Incident{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: r.scn.Incident.ScopeNamespaces[0],
-			Labels:    map[string]string{labelBenchScenario: r.scn.Name},
+			Name:      fmt.Sprintf("bench-%s-r%d", now.UTC().Format("20060102-150405"), n),
+			Namespace: scn.Incident.ScopeNamespaces[0],
+			Labels:    map[string]string{labelBenchScenario: scn.Name},
 		},
 		Spec: praxisv1alpha1.IncidentSpec{
 			// Manual: the harness files the incident the way an operator
 			// would; nothing here pretends to be Alertmanager.
 			Source:      praxisv1alpha1.IncidentSourceManual,
-			Severity:    r.scn.Incident.SeverityHint,
+			Severity:    scn.Incident.SeverityHint,
 			Description: neutralDescription,
-			Scope:       praxisv1alpha1.IncidentScope{Namespaces: r.scn.Incident.ScopeNamespaces},
+			Scope:       praxisv1alpha1.IncidentScope{Namespaces: scn.Incident.ScopeNamespaces},
 		},
 	}
+}
+
+// fileIncident creates the synthetic Incident the scenario prescribes.
+// Its name and spec carry no scenario identity (see neutralDescription).
+func (r *Runner) fileIncident(ctx context.Context, n int) (*praxisv1alpha1.Incident, error) {
+	inc := buildIncident(r.scn, n, time.Now())
 	if err := r.c.Create(ctx, inc); err != nil {
 		return nil, fmt.Errorf("create Incident %s/%s: %w", inc.Namespace, inc.Name, err)
 	}
@@ -256,24 +298,20 @@ func (r *Runner) fileIncident(ctx context.Context, n int) (*praxisv1alpha1.Incid
 
 // awaitResponse polls until a RemediationPlan references the Incident, the
 // restraint annotation appears, or the scenario timeout passes. The timeout
-// is an observation, not an error.
-func (r *Runner) awaitResponse(ctx context.Context, inc *praxisv1alpha1.Incident) (response, error) {
+// is an observation, not an error. Waited is measured from since (the
+// filing of the Incident), which the timeout also bounds; the first check
+// runs immediately so an already-persisted in-process response is
+// observed without a full tick of latency.
+func (r *Runner) awaitResponse(ctx context.Context, inc *praxisv1alpha1.Incident, since time.Time) (response, error) {
 	deadline := r.scn.Timeout()
 	r.out.f("    waiting up to %s for a RemediationPlan or the %s annotation on Incident %s/%s",
 		deadline, praxisv1alpha1.AnnotationNoActionProposed, inc.Namespace, inc.Name)
 
-	start := time.Now()
-	lastProgress := start
+	lastProgress := time.Now()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return response{}, ctx.Err()
-		case <-ticker.C:
-		}
-
 		for _, ns := range r.scn.Incident.ScopeNamespaces {
 			var plans praxisv1alpha1.RemediationPlanList
 			if err := r.c.List(ctx, &plans, client.InNamespace(ns)); err != nil {
@@ -287,9 +325,9 @@ func (r *Runner) awaitResponse(ctx context.Context, inc *praxisv1alpha1.Incident
 				if p.Spec.IncidentRef.UID != "" && p.Spec.IncidentRef.UID != inc.UID {
 					continue
 				}
-				waited := time.Since(start)
+				waited := time.Since(since)
 				r.out.f("    RemediationPlan %s/%s appeared after %s", ns, p.Name, fmtDur(waited))
-				return response{Kind: ResponsePlan, Detail: ns + "/" + p.Name, Waited: waited}, nil
+				return response{Kind: scoring.ResponsePlan, Detail: ns + "/" + p.Name, Waited: waited, Plan: p}, nil
 			}
 		}
 
@@ -298,23 +336,98 @@ func (r *Runner) awaitResponse(ctx context.Context, inc *praxisv1alpha1.Incident
 			return response{}, fmt.Errorf("refresh Incident %s/%s: %w", inc.Namespace, inc.Name, err)
 		}
 		if reason := cur.Annotations[praxisv1alpha1.AnnotationNoActionProposed]; reason != "" {
-			waited := time.Since(start)
+			waited := time.Since(since)
 			r.out.f("    %s appeared after %s (reason: %s)", praxisv1alpha1.AnnotationNoActionProposed, fmtDur(waited), reason)
-			return response{Kind: ResponseNoAction, Detail: reason, Waited: waited}, nil
+			return response{Kind: scoring.ResponseNoAction, Detail: reason, Waited: waited, NoActionReason: reason}, nil
 		}
 
-		if waited := time.Since(start); waited >= deadline {
+		if waited := time.Since(since); waited >= deadline {
 			r.out.f("    timed out after %s: no RemediationPlan and no %s annotation.", fmtDur(waited), praxisv1alpha1.AnnotationNoActionProposed)
 			if r.opts.Agent == AgentNone {
-				r.out.f("    Expected with --agent none: nothing is wired to respond yet — the rule-based baseline arrives with the scorer session (playbook 2.3).")
+				r.out.f("    Expected with --agent none: nothing is wired to respond.")
 			}
-			return response{Kind: ResponseTimeout, Detail: "graceful timeout", Waited: waited}, nil
+			return response{Kind: scoring.ResponseTimeout, Detail: "graceful timeout", Waited: waited}, nil
 		}
 		if time.Since(lastProgress) >= 30*time.Second {
 			lastProgress = time.Now()
-			r.out.f("    still waiting (%s of %s)…", fmtDur(time.Since(start)), deadline)
+			r.out.f("    still waiting (%s of %s)…", fmtDur(time.Since(since)), deadline)
+		}
+
+		select {
+		case <-ctx.Done():
+			return response{}, ctx.Err()
+		case <-ticker.C:
 		}
 	}
+}
+
+// recordRun turns one run's observations into a scored JSONL record. The
+// answer key (r.scn.GroundTruth) enters here and only here — after the
+// agent has answered — and Compute never mutates it.
+func (r *Runner) recordRun(n int, filedAt time.Time, inc *praxisv1alpha1.Incident,
+	report *agentrun.Report, resp response,
+) error {
+	rec := scoring.Record{
+		Schema:    scoring.RecordSchema,
+		Scenario:  r.scn.Name,
+		Run:       n,
+		Agent:     r.opts.Agent,
+		StartedAt: filedAt.UTC().Format(time.RFC3339),
+		Incident:  scoring.IncidentMeta{Namespace: inc.Namespace, Name: inc.Name},
+		Response: scoring.Response{
+			Kind:          resp.Kind,
+			Detail:        resp.Detail,
+			WaitedSeconds: resp.Waited.Seconds(),
+		},
+		NoActionReason: resp.NoActionReason,
+	}
+	if report != nil {
+		rec.Hypotheses = report.Hypotheses
+		rec.PlanCreateError = report.PlanCreateError
+		if resp.Kind == scoring.ResponsePlanInvalid {
+			// The rejected spec never reached the cluster; record what the
+			// agent proposed so the rejection stays inspectable.
+			rec.Plan = report.PlanSpec
+		}
+	}
+	if resp.Plan != nil {
+		rec.Plan = &resp.Plan.Spec
+		rec.PlanName = resp.Plan.Name
+	}
+
+	score := scoring.Compute(&rec, &r.scn.GroundTruth)
+	rec.Score = &score
+	r.records = append(r.records, rec)
+	r.out.f("    scored: top1=%v top3=%v restraint=%v forbidden=%d",
+		score.DiagnosisTop1, score.DiagnosisTop3, score.RestraintCorrect, score.ForbiddenViolations)
+	return scoring.AppendRecord(r.resultsFile, &rec)
+}
+
+// assertScenarioBlind fails the run if the exact serialized inputs the
+// agent received contain benchmark identity: the scenario's name, its
+// rootCauseId, or any groundTruth marker. Belt to the braces of the
+// agentrun import boundary and the fixture leak tests — this one runs on
+// every live run, over the real bundle.
+func assertScenarioBlind(scn *scenario.Scenario, report *agentrun.Report) error {
+	blob, err := json.Marshal(struct {
+		Incident *praxisv1alpha1.Incident `json:"incident"`
+		Bundle   *evidence.Bundle         `json:"bundle"`
+	}{report.SanitizedIncident, report.Bundle})
+	if err != nil {
+		return fmt.Errorf("serialize agent inputs for the leak check: %w", err)
+	}
+	lower := strings.ToLower(string(blob))
+	for _, token := range []string{
+		strings.ToLower(scn.Name),
+		strings.ToLower(scn.GroundTruth.RootCauseID),
+		"groundtruth",
+	} {
+		if strings.Contains(lower, token) {
+			return fmt.Errorf("benchmark identity leaked into the agent's inputs (found %q): "+
+				"the run's results would be meaningless; fix the leak before trusting any score", token)
+		}
+	}
+	return nil
 }
 
 // teardown deletes the scope namespaces and waits until they are gone, so

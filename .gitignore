@@ -38,3 +38,6 @@ cover.out
 .env
 .env.*
 !.env.example
+
+# Benchmark run records (praxisbench run) — summaries land in bench/RESULTS.md
+bench/results/
