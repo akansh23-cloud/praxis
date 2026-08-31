@@ -14,10 +14,12 @@ From the repository root:
 ```bash
 make -C bench helm      # one-time: pinned helm v3.21.4 into ./bin
 make -C bench build     # builds bench/bin/praxisbench
-bench/bin/praxisbench run --scenario smoke
+bench/bin/praxisbench run --scenario oomkill-after-commit   # one pack
+bench/bin/praxisbench run --scenario all                    # every pack
 ```
 
-(or `make -C bench run-smoke`, which does all three).
+(or `make -C bench run-smoke` / `make -C bench run-all`, which build
+first).
 
 `run` drives the whole pipeline against a dedicated kind cluster:
 
@@ -29,13 +31,17 @@ bench/bin/praxisbench run --scenario smoke
    checkout, waiting until both CRDs are Established.
 3. **deploy-stack** — idempotent pinned installs of minimal single-replica
    Prometheus, Loki (+promtail) and Chaos Mesh (see table below).
-4. Per run (`--runs N` repeats this part): create the scenario's scope
-   namespaces → apply its topology overlay → wait until every Deployment
-   is fully available → inject the fault → file the synthetic Incident →
-   wait up to the scenario's `timeoutMinutes` for a **RemediationPlan**
-   referencing it or the **`praxis.dev/no-action-proposed`** annotation on
-   it → tear the namespaces down (`--keep` skips teardown and prints how
-   to inspect what was left).
+4. Per scenario and run (`--scenario all` iterates every pack; `--runs N`
+   repeats each): create the scenario's scope namespaces → apply its
+   topology overlay → wait until every Deployment is fully available →
+   inject the fault → **prove the fault manifested** (each pack's
+   mechanical check in `cli/faultcheck/`, no agent involved) → file the
+   synthetic Incident → wait up to the scenario's `timeoutMinutes` for a
+   **RemediationPlan** referencing it or the
+   **`praxis.dev/no-action-proposed`** annotation on it → tear the
+   namespaces down (`--keep` skips teardown and prints how to inspect
+   what was left; ChaosMesh faults delete their experiment first so
+   finalizers resolve cleanly).
 
 With `--agent none` (the default, and the only agent that exists yet) the
 wait **must** end in a graceful timeout — nothing is wired to respond.
@@ -56,7 +62,7 @@ Per `docs/02-LLD.md` §2 and §17:
 
 | Path | Holds |
 |---|---|
-| `cli/` | the Go module's code: `praxisbench/` (cobra CLI), `scenario/` (schema + strict loader), `runner/` (pipeline), `deploystack/` (pinned installs), `kube/` (tooling + client) |
+| `cli/` | the Go module's code: `praxisbench/` (cobra CLI), `scenario/` (schema + strict loader), `runner/` (pipeline), `faultcheck/` (per-scenario fault-manifested checks), `deploystack/` (pinned installs), `kube/` (tooling + client) |
 | `scenarios/` | one directory per scenario: `scenario.yaml` + its fault payload |
 | `topology/` | the demo shop stack: kustomize base + per-scenario overlays |
 | `deploy/` | pinned helm values for the cluster dependencies |
@@ -111,11 +117,42 @@ and every problem in the file is reported in one pass):
 - every shipped pack is loaded by a unit test, so a pack that drifts from
   the schema fails `make -C bench test` before it fails a run.
 
-To add a scenario: create `scenarios/<name>/scenario.yaml` (the smoke one
-above is 27 lines) plus a fault payload, point `topology.kustomize` at an
-existing overlay or add one under `topology/overlays/<name>/`, and run
-`praxisbench run --scenario <name>`. The six real Phase 2 packs arrive
-with Session 2.2.
+To add a scenario:
+
+1. create `scenarios/<name>/scenario.yaml` plus a fault payload — every
+   shipped pack is 19–29 non-comment lines of YAML, and the loader test
+   walks new packs automatically;
+2. point `topology.kustomize` at an existing overlay or add one under
+   `topology/overlays/<name>/` (usually 9 lines: the base plus a
+   scenario annotation);
+3. register the pack's fault-manifested check in
+   `cli/faultcheck/registry.go` — compose the existing helpers
+   (`pollUntil`, the pod/PDB/stats classifiers) or write a new observer;
+   `make -C bench test` fails until every pack has a check and every
+   check has a pack;
+4. run `praxisbench run --scenario <name>` (or `--scenario all`).
+
+## The six packs
+
+Each pack records why its fault mechanism was chosen in `fault.notes`
+(and header comments) — patches where the fault IS a spec change, plain
+manifests where the fault is an object arriving, Chaos Mesh only where it
+genuinely adds value (once, deliberately). `fixPredicate`/`harmPredicate`
+stay unset until the effect-side machinery lands in Phase 5.
+
+| Pack | Fault (mechanism) | Manifested check | Ground truth |
+|---|---|---|---|
+| `oomkill-after-commit` | SSA patch lowers checkout-api's session-cache memory limit to 16Mi under a 40MiB anonymous ballast (`agnhost stress`) | an OOMKilled container status on a checkout-api pod | `memory-limit-lowered`; fix `PatchResourceLimits`; `ScaleWorkload` forbidden |
+| `bad-image-tag` | SSA patch moves checkout-api to a tag the registry never served | a pod stuck in ErrImagePull/ImagePullBackOff | `image-tag-nonexistent`; fix `RollbackRelease`; restart/scale forbidden |
+| `readiness-wrong-port` | SSA patch points storefront's readiness probe at port 8081 | a Running-not-Ready pod **plus** the kubelet's "Readiness probe failed" event | `readiness-probe-wrong-port`; fix `RollbackRelease`; `ScaleWorkload` forbidden |
+| `pdb-deadlock` | manifest applies a PDB with `minAvailable: 3` over 2 replicas | `disruptionsAllowed=0` with `DisruptionAllowed=False/InsufficientPods`, reconciled | `pdb-minavailable-exceeds-replicas`; only `ScaleWorkload` up relieves the budget; restart/rollback/cordon forbidden |
+| `noisy-neighbour` | manifest deploys one limit-less `batch-analytics` pod burning 2 CPUs | hog Running with no CPU limits **and** >0.5 cores measured via the kubelet stats summary | `batch-analytics-cpu-unbounded`; fix targets the hog; touching the inventory victim forbidden |
+| `downstream-dep-restraint` | Chaos Mesh NetworkChaos partitions `payment-provider-sim` from the shop (iptables, not netem — WSL2-kernel-proof) | provider pods Ready + `AllInjected=True` + in-pod `agnhost connect` TIMEOUT, after a reachable-service positive control | `external-payment-provider-unreachable`; **restraintExpected: true** — the only correct response is the `praxis.dev/no-action-proposed` annotation, never a plan |
+
+The six timeouts are 2 minutes each: with `--agent none` the wait always
+runs to its graceful timeout, so Phase 2 sizes it for the mechanical
+pipeline; sessions that wire real agents (2.3+) revisit the budgets per
+pack.
 
 ## The topology
 
@@ -157,10 +194,34 @@ RAM, cold image cache for the stack):
 
 | Number | Value |
 |---|---|
-| cold start → fault injected (create cluster 46s, CRDs 0.8s, stack install incl. image pulls 2m52s, topology applied + healthy 13s, fault 0.2s) | **3m52s** |
-| the same cold run end-to-end (adds the smoke pack's deliberate 2m wait and 12s teardown) | 6m04s |
-| warm re-run end-to-end (cluster reuse 0.6s, idempotent stack re-install 10s, topology healthy 9s, 2m wait, teardown 12s) | 2m33s |
-| whole-cluster memory with stack + topology + Incident live (`docker stats` on the node container, 7.4 GiB host) | **1.9 GiB** |
+| Session 2.1 baseline: cold start → smoke fault injected | **3m52s** |
+| Session 2.2: cold start → oomkill fault injected (create cluster 32s, CRDs 0.7s, stack 2m41s, topology healthy 9s, fault 0.2s) | **3m23s** |
+| warm re-run of one pack end-to-end (healthy pinned releases skipped offline, 2m graceful wait included) | ~3m |
+| whole-cluster memory with stack + topology + Incident live (`docker stats` on the node container, 7.4 GiB host) — re-measured in 2.2 with the oomkill overlay's ballast containers and its fault injected: 1.887 GiB | **1.9 GiB** |
 
 The budget is ≤10 minutes cold to fault-ready and ≤4 GiB for one
 scenario; both hold with room to spare.
+
+## Determinism (measured)
+
+Playbook Session 2.2 requires each fault to manifest 3/3 times. The
+canonical pass is:
+
+```bash
+bench/bin/praxisbench run --scenario all --runs 3
+```
+
+Measured 2026-08-31 on the environment above: all 21 runs (7 scenarios
+× 3) completed, every fault manifested, every wait ended in the expected
+graceful `NoResponse` timeout with `--agent none`, exit code 0, 50m01s
+total. Fault-manifested phase time per run:
+
+| Scenario | Mechanism | r1 | r2 | r3 | Result |
+|---|---|---|---|---|---|
+| `oomkill-after-commit` | Patch (SSA) | 3s | 3s | 3s | **3/3** |
+| `bad-image-tag` | Patch (SSA) | 3s | 3s | 3s | **3/3** |
+| `readiness-wrong-port` | Patch (SSA) | 3s | 3s | 3s | **3/3** |
+| `pdb-deadlock` | Manifest | 3s | 5ms | 3s | **3/3** |
+| `noisy-neighbour` | Manifest | 15s | 12s | 12s | **3/3** |
+| `downstream-dep-restraint` | ChaosMesh | 9s | 9s | 9s | **3/3** |
+| `smoke` (2.1 pipeline proof, inert) | Manifest | 3ms | 1ms | 2ms | 3/3 |

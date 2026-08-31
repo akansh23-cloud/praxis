@@ -39,13 +39,14 @@ Commit hashes below are on `main` at `origin`.
 
 | Criterion | Status | Date | Commit |
 |---|---|---|---|
-| FR-P2-01 — `praxisbench run` on a laptop: namespaces → topology → fault → Incident → wait → score → teardown; first fault ≤10 min from a cold kind cluster | partial — the pipeline runs end-to-end and the smoke fault is injected 3m52s from a cold cluster (measured); real faults arrive with the 2.2 packs, scoring with 2.3 | 2026-08-31 | `bded21f` |
+| FR-P2-01 — `praxisbench run` on a laptop: namespaces → topology → fault → Incident → wait → score → teardown; first fault ≤10 min from a cold kind cluster | partial — the pipeline runs end-to-end with real faults injected AND mechanically verified (Session 2.2: oomkill fault injected 3m23s from a cold cluster, measured); scoring remains for 2.3 | 2026-08-31 | `bded21f`, Session 2.2 commits |
 | FR-P2-02 — declarative scenario YAML per LLD §17 (topology ref, fault, ground truth, predicates, timeout) | met — Go types + strict loader with field-path errors; every shipped pack is walked through the loader by a unit test | 2026-08-31 | `7831024` |
 | FR-P2-03 — scorer emitting per-run JSONL + aggregates incl. restraint correctness | pending — Session 2.3; the restraint contract (`praxis.dev/no-action-proposed`) is declared and the runner already waits on it (`80abebb`) | | |
 | FR-P2-04 — rule-based baseline agent behind the Agent interface | pending — Session 2.3 | | |
 | FR-P2-05 — distributions (mean ± min/max) over N runs | pending — Session 2.3; `--runs N` already loops the runner | | |
-| FR-P2-06 — `bench/README.md` documents adding a scenario in <30 lines | partial — schema, how-to and the 27-line smoke pack documented; the six real packs (2.2) are the proof that real scenarios stay under 30 lines | 2026-08-31 | see Session 2.1 row |
-| Exit: all 6 scenarios run green mechanically | pending — Session 2.2 | | |
+| FR-P2-06 — `bench/README.md` documents adding a scenario in <30 lines | met — all six real packs are 25–29 non-comment YAML lines; README documents the add-a-scenario steps (YAML + overlay + registered fault check) | 2026-08-31 | Session 2.2 docs commit |
+| Exit: all 6 scenarios run green mechanically | met — `praxisbench run --scenario all --runs 3`: 21/21 runs green, every fault manifested 3/3 with per-pack mechanical checks and no agent, graceful `NoResponse` waits, 50m01s total | 2026-08-31 | `89239d8`..`1bd4610` |
 | Exit: baseline scores recorded in `bench/RESULTS.md` | pending — Session 2.3 | | |
 | Exit: CI smoke job runs one scenario nightly | pending — wired after 2.2/2.3 | | |
 | Session 2.1 — harness skeleton: bench as its own Go module, praxisbench CLI (run/score/report + flags), §17 schema loader, pinned deploy stack (Prometheus 29.27.0, loki-stack 2.10.3, Chaos Mesh 2.8.4, helm v3.21.4), shop topology, smoke scenario end-to-end **twice in a row** with its expected graceful timeout; cold→fault 3m52s, cluster footprint 1.9 GiB | met | 2026-08-31 | `716a8ce`, `7831024`, `e3c6143`, `f2c3043`, `80abebb`, `bded21f` + docs commit |
+| Session 2.2 — the six scenario packs: Patch (server-side-apply) + ChaosMesh fault injection, per-scenario fault-manifested checks (`cli/faultcheck`, registry enforced by tests both ways), six packs each with overlay/fault/groundTruth/mechanism rationale, `--scenario all`, offline skip of healthy pinned releases; determinism pass 21/21 (each fault 3/3), cold→oomkill fault 3m23s, Chainsaw + envtest Phase 1 suites re-verified green | met | 2026-08-31 | `e986a44`..`d7a4dd2` + docs commit |
