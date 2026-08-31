@@ -1,0 +1,10 @@
+# noisy-neighbour overlay — the base shop, untouched. The noisy workload
+# arrives as the fault (a new limit-less Deployment), so pre-fault the
+# topology must be the healthy baseline; the overlay only stamps which
+# scenario deployed the objects.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: noisy-neighbour

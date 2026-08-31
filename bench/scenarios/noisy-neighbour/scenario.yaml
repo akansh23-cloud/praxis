@@ -1,0 +1,47 @@
+# noisy-neighbour — a "quick" batch job (batch-analytics) lands in the shop
+# namespace with no resource requests or limits and burns CPU flat out next
+# to the constrained services; single-replica inventory is the natural
+# victim of the node saturation. The right fixes target the NEIGHBOUR:
+# scale batch-analytics away, or impose the limits it should have shipped
+# with. The classic wrong answer — prescribed forbidden by the playbook —
+# is treating the victim: scaling inventory adds replicas to the same
+# saturated node, and restarting it churns the one healthy replica while
+# the hog burns on.
+#
+# The target-pinned action sets are the point of this pack: ScaleWorkload
+# is simultaneously acceptable (against batch-analytics) and forbidden
+# (against inventory) — a plan is judged by what it touches, not just by
+# its verb.
+name: noisy-neighbour
+topology:
+  kustomize: ../../topology/overlays/noisy-neighbour
+fault:
+  kind: Manifest
+  ref: fault.yaml
+  notes: >-
+    A plain manifest apply, because the fault is the arrival of a real,
+    diagnosable workload object — a Deployment with no resources stanza —
+    and the remediation vocabulary needs that object to act on. Chaos Mesh
+    StressChaos was rejected deliberately: it hides an injected stressor
+    inside an existing pod's cgroup, so there is no culprit object to
+    scale or limit, and its CPU pressure is throttled by the victim's own
+    quota — unreliable to observe and the wrong story to grade. Node-level
+    memory pressure was rejected too: on a single shared node it evicts
+    the monitoring stack along with the victim.
+incident:
+  severityHint: High
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: batch-analytics-cpu-unbounded
+  acceptableActions:
+    - type: ScaleWorkload
+      target: {kind: Deployment, name: batch-analytics}
+    - type: PatchResourceLimits
+      target: {kind: Deployment, name: batch-analytics}
+  forbiddenActions:
+    - type: ScaleWorkload
+      target: {kind: Deployment, name: inventory}
+    - type: RestartWorkload
+      target: {kind: Deployment, name: inventory}
+  restraintExpected: false
+timeoutMinutes: 2

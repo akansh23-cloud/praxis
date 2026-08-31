@@ -1,0 +1,42 @@
+# The neighbour: one pod (playbook: "one pod starves others") burning two
+# CPUs with no resources stanza at all — no requests, no limits. BestEffort
+# QoS is the fault's signature AND the blast-radius bound: with zero
+# requested share, CFS gives the hog only otherwise-idle cycles, so the
+# bench cluster's own components stay schedulable while the node saturates.
+# agnhost's stress subcommand burns the CPU (verified ~1.3 cores for
+# --cpus 2 in isolation); the fault check reads the burn from the
+# kubelet's stats summary, not from luck.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: batch-analytics
+  labels:
+    app: batch-analytics
+  annotations:
+    kubernetes.io/change-cause: "commit e51fd90: one-off analytics backfill, remove after Q3"
+    praxis.dev/commit: e51fd9028c77
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: batch-analytics
+  template:
+    metadata:
+      labels:
+        app: batch-analytics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: batch-analytics
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args:
+            - stress
+            - --cpus=2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

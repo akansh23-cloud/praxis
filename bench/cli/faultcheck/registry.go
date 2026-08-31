@@ -11,6 +11,7 @@ package faultcheck
 // check and a check cannot outlive its pack.
 var registry = map[string]Check{
 	"bad-image-tag":        badImageTag,
+	"noisy-neighbour":      noisyNeighbour,
 	"oomkill-after-commit": oomkillAfterCommit,
 	"pdb-deadlock":         pdbDeadlock,
 	"readiness-wrong-port": readinessWrongPort,
