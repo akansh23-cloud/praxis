@@ -18,8 +18,11 @@ import (
 // Field paths and message fragments asserted by three or more cases.
 const (
 	wantRequired        = "required"
+	wantAtLeastOne      = "at least one"
+	wantDuplicate       = "duplicate"
 	fieldKustomize      = "topology.kustomize"
 	fieldScopeNamespace = "incident.scopeNamespaces"
+	fieldKeyphrase1     = "requiredSummaryKeyphrases[1]"
 )
 
 // baseYAML is a fully valid scenario. Reject cases below mutate exactly one
@@ -269,7 +272,7 @@ func TestLoadRejects(t *testing.T) {
 		{
 			name: "scope namespaces empty",
 			yaml: func(t *testing.T) string { return mutate(t, "scopeNamespaces: [shop]", "scopeNamespaces: []") },
-			want: []string{fieldScopeNamespace, "at least one"},
+			want: []string{fieldScopeNamespace, wantAtLeastOne},
 		},
 		{
 			name: "scope namespaces over the Incident CRD cap",
@@ -289,7 +292,7 @@ func TestLoadRejects(t *testing.T) {
 			yaml: func(t *testing.T) string {
 				return mutate(t, "scopeNamespaces: [shop]", "scopeNamespaces: [shop, shop]")
 			},
-			want: []string{fieldScopeNamespace, "duplicate"},
+			want: []string{fieldScopeNamespace, wantDuplicate},
 		},
 		{
 			name: "root cause id missing",
@@ -341,7 +344,7 @@ func TestLoadRejects(t *testing.T) {
 				return mutate(t, "requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/podstatus-*]",
 					"requiredEvidenceIdPatterns: []")
 			},
-			want: []string{"requiredEvidenceIdPatterns", "at least one"},
+			want: []string{"requiredEvidenceIdPatterns", wantAtLeastOne},
 		},
 		{
 			name: "evidence pattern without the ev/ scheme",
@@ -362,7 +365,7 @@ func TestLoadRejects(t *testing.T) {
 			yaml: func(t *testing.T) string {
 				return mutate(t, "[ev/gitcommit-*, ev/podstatus-*]", "[ev/gitcommit-*, ev/gitcommit-*]")
 			},
-			want: []string{"requiredEvidenceIdPatterns[1]", "duplicate"},
+			want: []string{"requiredEvidenceIdPatterns[1]", wantDuplicate},
 		},
 		{
 			name: "keyphrase set empty",
@@ -370,35 +373,35 @@ func TestLoadRejects(t *testing.T) {
 				return mutate(t, "requiredSummaryKeyphrases: [checkout-api, memory limit]",
 					"requiredSummaryKeyphrases: []")
 			},
-			want: []string{"requiredSummaryKeyphrases", "at least one"},
+			want: []string{"requiredSummaryKeyphrases", wantAtLeastOne},
 		},
 		{
 			name: "keyphrase blank",
 			yaml: func(t *testing.T) string {
 				return mutate(t, "[checkout-api, memory limit]", `[checkout-api, "  "]`)
 			},
-			want: []string{"requiredSummaryKeyphrases[1]", "3 characters"},
+			want: []string{fieldKeyphrase1, "3 characters"},
 		},
 		{
 			name: "keyphrase too short to mean anything",
 			yaml: func(t *testing.T) string {
 				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, ok]")
 			},
-			want: []string{"requiredSummaryKeyphrases[1]", "3 characters"},
+			want: []string{fieldKeyphrase1, "3 characters"},
 		},
 		{
 			name: "keyphrase not canonical lowercase",
 			yaml: func(t *testing.T) string {
 				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, Memory Limit]")
 			},
-			want: []string{"requiredSummaryKeyphrases[1]", "lowercase"},
+			want: []string{fieldKeyphrase1, "lowercase"},
 		},
 		{
 			name: "keyphrase duplicated",
 			yaml: func(t *testing.T) string {
 				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, checkout-api]")
 			},
-			want: []string{"requiredSummaryKeyphrases[1]", "duplicate"},
+			want: []string{fieldKeyphrase1, wantDuplicate},
 		},
 		{
 			name: "fix predicate missing",
