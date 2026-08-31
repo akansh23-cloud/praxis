@@ -34,3 +34,18 @@ Commit hashes below are on `main` at `origin`.
 | Exit: Chainsaw green on kind **in CI on a PR** | met | 2026-08-28 | PR #1 (`phase1-verification` → `main`, head `073a776`): Tests, Lint and E2E (Chainsaw) all green; merged as `3e4df82` |
 | Exit: asciinema of the walk + rejections committed under `docs/demo/` | met | 2026-08-28 | `073a776` — `docs/demo/phase1.cast`, driven by the script from `4eed68a` |
 | Milestone: tag `v0.1.0-alpha.1` | met | 2026-08-28 | annotated tag pushed at `073a776`; reachable from `main` but predates merge commit `3e4df82` |
+
+## Phase 2 — Benchmark harness, before the AI
+
+| Criterion | Status | Date | Commit |
+|---|---|---|---|
+| FR-P2-01 — `praxisbench run` on a laptop: namespaces → topology → fault → Incident → wait → score → teardown; first fault ≤10 min from a cold kind cluster | partial — the pipeline runs end-to-end and the smoke fault is injected 3m52s from a cold cluster (measured); real faults arrive with the 2.2 packs, scoring with 2.3 | 2026-08-31 | `bded21f` |
+| FR-P2-02 — declarative scenario YAML per LLD §17 (topology ref, fault, ground truth, predicates, timeout) | met — Go types + strict loader with field-path errors; every shipped pack is walked through the loader by a unit test | 2026-08-31 | `7831024` |
+| FR-P2-03 — scorer emitting per-run JSONL + aggregates incl. restraint correctness | pending — Session 2.3; the restraint contract (`praxis.dev/no-action-proposed`) is declared and the runner already waits on it (`80abebb`) | | |
+| FR-P2-04 — rule-based baseline agent behind the Agent interface | pending — Session 2.3 | | |
+| FR-P2-05 — distributions (mean ± min/max) over N runs | pending — Session 2.3; `--runs N` already loops the runner | | |
+| FR-P2-06 — `bench/README.md` documents adding a scenario in <30 lines | partial — schema, how-to and the 27-line smoke pack documented; the six real packs (2.2) are the proof that real scenarios stay under 30 lines | 2026-08-31 | see Session 2.1 row |
+| Exit: all 6 scenarios run green mechanically | pending — Session 2.2 | | |
+| Exit: baseline scores recorded in `bench/RESULTS.md` | pending — Session 2.3 | | |
+| Exit: CI smoke job runs one scenario nightly | pending — wired after 2.2/2.3 | | |
+| Session 2.1 — harness skeleton: bench as its own Go module, praxisbench CLI (run/score/report + flags), §17 schema loader, pinned deploy stack (Prometheus 29.27.0, loki-stack 2.10.3, Chaos Mesh 2.8.4, helm v3.21.4), shop topology, smoke scenario end-to-end **twice in a row** with its expected graceful timeout; cold→fault 3m52s, cluster footprint 1.9 GiB | met | 2026-08-31 | `716a8ce`, `7831024`, `e3c6143`, `f2c3043`, `80abebb`, `bded21f` + docs commit |
