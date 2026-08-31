@@ -87,12 +87,31 @@ type ActionRef struct {
 	Target *ActionTarget `json:"target,omitempty"`
 }
 
+// DiagnosisRule is the LLD §17.3 deterministic matching rule (ADR-005):
+// the answer key a correct diagnosis must satisfy, authored with the
+// scenario so neither the scorer (Session 2.3) nor any agent ever writes
+// it. Matching itself is NOT implemented here — this is ground truth only.
+type DiagnosisRule struct {
+	// RequiredEvidenceIDPatterns are ev/<source>-* globs the hypothesis's
+	// citations must include. Source tokens are the §6 evidence types,
+	// lowercased — a closed set, validated at load time.
+	RequiredEvidenceIDPatterns []string `json:"requiredEvidenceIdPatterns"`
+
+	// RequiredSummaryKeyphrases are lowercase substrings the hypothesis
+	// summary must contain; §17.3 matching is case-insensitive, so
+	// lowercase is the canonical stored form.
+	RequiredSummaryKeyphrases []string `json:"requiredSummaryKeyphrases"`
+}
+
 // GroundTruth is what the scorer (Session 2.3) judges an agent's plan
 // against. It is authored with the scenario, before any agent exists.
 type GroundTruth struct {
 	// RootCauseID is the scenario's diagnosis key for the deterministic
 	// matching rules of LLD §17.3.
 	RootCauseID string `json:"rootCauseId"`
+
+	// Diagnosis is the §17.3 matching rule for RootCauseID. Required.
+	Diagnosis DiagnosisRule `json:"diagnosis"`
 
 	// AcceptableActions is the set of plans-content the scenario accepts.
 	// Must be empty when RestraintExpected is true — a restraint
@@ -108,10 +127,12 @@ type GroundTruth struct {
 	// RemediationPlan.
 	RestraintExpected bool `json:"restraintExpected"`
 
-	// FixPredicate and HarmPredicate are PromQL, evaluated effect-side
-	// from Phase 5 on; optional until then.
-	FixPredicate  string `json:"fixPredicate,omitempty"`
-	HarmPredicate string `json:"harmPredicate,omitempty"`
+	// FixPredicate and HarmPredicate are deterministic PromQL with
+	// Prometheus alerting semantics (true ⇔ ≥1 sample returned): what
+	// "fixed" and "harmed" mean for this scenario. Required ground truth
+	// per pack (ADR-005); evaluated effect-side only from Phase 5 on.
+	FixPredicate  string `json:"fixPredicate"`
+	HarmPredicate string `json:"harmPredicate"`
 }
 
 // Scenario is one scenarios/<name>/scenario.yaml, loaded and validated.

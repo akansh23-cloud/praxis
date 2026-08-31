@@ -4,9 +4,16 @@
 # re-pulls the same nonexistent tag and scaling multiplies unpullable pods,
 # so both are forbidden whatever the target — neither can conjure the image
 # into the registry.
+#
+# Diagnosis rule (§17.3, ADR-005): the release annotations make the deploy
+# trail gitcommit evidence, and the kubelet's Failed/BackOff pull events
+# are the symptom — a correct diagnosis cites both and names the workload
+# and the broken image tag.
+#
+# Effect predicates: fixed = the rollout completes on a pullable image with
+# no pods stuck pulling; harmed = checkout-api availability below spec.
 name: bad-image-tag
-topology:
-  kustomize: ../../topology/overlays/bad-image-tag
+topology: {kustomize: ../../topology/overlays/bad-image-tag}
 fault:
   kind: Patch
   ref: fault.yaml
@@ -17,16 +24,18 @@ fault:
     network, since an unreachable registry lands in the same ErrImagePull
     family. Chaos Mesh has nothing to inject here; the fault lives in the
     spec, not the runtime.
-incident:
-  severityHint: High
-  scopeNamespaces: [shop]
+incident: {severityHint: High, scopeNamespaces: [shop]}
 groundTruth:
   rootCauseId: image-tag-nonexistent
-  acceptableActions:
-    - type: RollbackRelease
-      target: {kind: Deployment, name: checkout-api}
-  forbiddenActions:
-    - type: RestartWorkload
-    - type: ScaleWorkload
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/event-*]
+    requiredSummaryKeyphrases: [checkout-api, image tag, pull]
+  acceptableActions: [{type: RollbackRelease, target: {kind: Deployment, name: checkout-api}}]
+  forbiddenActions: [{type: RestartWorkload}, {type: ScaleWorkload}]
   restraintExpected: false
+  fixPredicate: >-
+    kube_deployment_status_replicas_updated{namespace="shop",deployment="checkout-api"} >= 2
+    and on() sum(kube_pod_container_status_waiting_reason{namespace="shop",pod=~"checkout-api-.*",reason=~"ErrImagePull|ImagePullBackOff"}) == 0
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="checkout-api"} < 2
 timeoutMinutes: 2

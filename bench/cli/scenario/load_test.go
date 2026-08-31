@@ -36,12 +36,17 @@ incident:
   scopeNamespaces: [shop]
 groundTruth:
   rootCauseId: memory-limit-lowered
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/podstatus-*]
+    requiredSummaryKeyphrases: [checkout-api, memory limit]
   acceptableActions:
     - type: PatchResourceLimits
       target: {kind: Deployment, name: checkout-api}
   forbiddenActions:
     - type: ScaleWorkload
   restraintExpected: false
+  fixPredicate: 'up{job="demo"} == 1'
+  harmPredicate: 'up{job="demo"} == 0'
 timeoutMinutes: 12
 `
 
@@ -127,6 +132,16 @@ func TestLoadValid(t *testing.T) {
 			if len(s.GroundTruth.ForbiddenActions) != 1 || s.GroundTruth.ForbiddenActions[0].Target != nil {
 				t.Errorf("ForbiddenActions = %+v, want one bare ScaleWorkload", s.GroundTruth.ForbiddenActions)
 			}
+			diag := s.GroundTruth.Diagnosis
+			if len(diag.RequiredEvidenceIDPatterns) != 2 || diag.RequiredEvidenceIDPatterns[0] != "ev/gitcommit-*" {
+				t.Errorf("Diagnosis.RequiredEvidenceIDPatterns = %v, want [ev/gitcommit-* ev/podstatus-*]", diag.RequiredEvidenceIDPatterns)
+			}
+			if len(diag.RequiredSummaryKeyphrases) != 2 || diag.RequiredSummaryKeyphrases[1] != "memory limit" {
+				t.Errorf("Diagnosis.RequiredSummaryKeyphrases = %v, want [checkout-api, memory limit]", diag.RequiredSummaryKeyphrases)
+			}
+			if s.GroundTruth.FixPredicate == "" || s.GroundTruth.HarmPredicate == "" {
+				t.Errorf("predicates = (%q, %q), want both populated", s.GroundTruth.FixPredicate, s.GroundTruth.HarmPredicate)
+			}
 		})
 	}
 }
@@ -152,6 +167,22 @@ func TestShippedScenariosLoad(t *testing.T) {
 			}
 			if s.Name != e.Name() {
 				t.Errorf("Name = %q, want %q", s.Name, e.Name())
+			}
+			// Every shipped pack must carry its full §17.3 answer key and
+			// effect-side ground truth (ADR-005) — the validator enforces
+			// this, and these assertions keep the proof explicit even if
+			// the validator regresses.
+			if len(s.GroundTruth.Diagnosis.RequiredEvidenceIDPatterns) == 0 {
+				t.Error("shipped pack has no requiredEvidenceIdPatterns (§17.3)")
+			}
+			if len(s.GroundTruth.Diagnosis.RequiredSummaryKeyphrases) == 0 {
+				t.Error("shipped pack has no requiredSummaryKeyphrases (§17.3)")
+			}
+			if strings.TrimSpace(s.GroundTruth.FixPredicate) == "" {
+				t.Error("shipped pack has no fixPredicate (ADR-005)")
+			}
+			if strings.TrimSpace(s.GroundTruth.HarmPredicate) == "" {
+				t.Error("shipped pack has no harmPredicate (ADR-005)")
 			}
 		})
 	}
@@ -293,6 +324,95 @@ func TestLoadRejects(t *testing.T) {
 					"target: {kind: ReplicaSet, name: checkout-api}")
 			},
 			want: []string{"groundTruth.acceptableActions[0].target.kind", "ReplicaSet", "Deployment"},
+		},
+		{
+			name: "diagnosis rule missing",
+			yaml: func(t *testing.T) string {
+				return mutate(t, `  diagnosis:
+    requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/podstatus-*]
+    requiredSummaryKeyphrases: [checkout-api, memory limit]
+`, "")
+			},
+			want: []string{"requiredEvidenceIdPatterns", "requiredSummaryKeyphrases", wantRequired, "§17.3"},
+		},
+		{
+			name: "evidence pattern set empty",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/podstatus-*]",
+					"requiredEvidenceIdPatterns: []")
+			},
+			want: []string{"requiredEvidenceIdPatterns", "at least one"},
+		},
+		{
+			name: "evidence pattern without the ev/ scheme",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "ev/gitcommit-*", "gitcommit-*")
+			},
+			want: []string{"requiredEvidenceIdPatterns[0]", "ev/<source>-<glob>"},
+		},
+		{
+			name: "evidence source outside the closed set",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "ev/gitcommit-*", "ev/gitlab-*")
+			},
+			want: []string{"requiredEvidenceIdPatterns[0]", `"gitlab"`, "podstatus", "gitcommit", "ADR-005"},
+		},
+		{
+			name: "evidence pattern duplicated",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "[ev/gitcommit-*, ev/podstatus-*]", "[ev/gitcommit-*, ev/gitcommit-*]")
+			},
+			want: []string{"requiredEvidenceIdPatterns[1]", "duplicate"},
+		},
+		{
+			name: "keyphrase set empty",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "requiredSummaryKeyphrases: [checkout-api, memory limit]",
+					"requiredSummaryKeyphrases: []")
+			},
+			want: []string{"requiredSummaryKeyphrases", "at least one"},
+		},
+		{
+			name: "keyphrase blank",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "[checkout-api, memory limit]", `[checkout-api, "  "]`)
+			},
+			want: []string{"requiredSummaryKeyphrases[1]", "3 characters"},
+		},
+		{
+			name: "keyphrase too short to mean anything",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, ok]")
+			},
+			want: []string{"requiredSummaryKeyphrases[1]", "3 characters"},
+		},
+		{
+			name: "keyphrase not canonical lowercase",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, Memory Limit]")
+			},
+			want: []string{"requiredSummaryKeyphrases[1]", "lowercase"},
+		},
+		{
+			name: "keyphrase duplicated",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "[checkout-api, memory limit]", "[checkout-api, checkout-api]")
+			},
+			want: []string{"requiredSummaryKeyphrases[1]", "duplicate"},
+		},
+		{
+			name: "fix predicate missing",
+			yaml: func(t *testing.T) string {
+				return mutate(t, "  fixPredicate: 'up{job=\"demo\"} == 1'\n", "")
+			},
+			want: []string{"groundTruth.fixPredicate", wantRequired, "ADR-005"},
+		},
+		{
+			name: "harm predicate blank",
+			yaml: func(t *testing.T) string {
+				return mutate(t, `harmPredicate: 'up{job="demo"} == 0'`, `harmPredicate: '   '`)
+			},
+			want: []string{"groundTruth.harmPredicate", wantRequired},
 		},
 		{
 			name: "restraint contradicted by acceptable actions",

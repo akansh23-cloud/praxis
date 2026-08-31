@@ -20,9 +20,17 @@
 # victim's own quota: unreliable to observe and the wrong story to grade.
 # Node-level memory pressure was rejected too: on a single shared node it
 # evicts the monitoring stack along with the victim.
+#
+# Diagnosis rule (§17.3, ADR-005): the burn is metric evidence (cAdvisor
+# CPU series) and the missing-limits misconfiguration shows in the hog's
+# pod status (qosClass BestEffort); a correct diagnosis names the hog and
+# its unbounded CPU.
+#
+# Effect predicates: fixed = batch-analytics no longer burning (bounded
+# under 0.2 cores, or gone entirely — absent() covers scale-to-zero);
+# harmed = the inventory victim losing its one available replica.
 name: noisy-neighbour
-topology:
-  kustomize: ../../topology/overlays/noisy-neighbour
+topology: {kustomize: ../../topology/overlays/noisy-neighbour}
 fault:
   kind: Manifest
   ref: fault.yaml
@@ -32,20 +40,20 @@ fault:
     and the remediation vocabulary needs that object to act on. Chaos
     Mesh StressChaos hides the stressor inside an existing pod's cgroup:
     no culprit object, wrong story (details in the header comment).
-incident:
-  severityHint: High
-  scopeNamespaces: [shop]
+incident: {severityHint: High, scopeNamespaces: [shop]}
 groundTruth:
   rootCauseId: batch-analytics-cpu-unbounded
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/metric-*, ev/podstatus-*]
+    requiredSummaryKeyphrases: [batch-analytics, cpu, limit]
   acceptableActions:
-    - type: ScaleWorkload
-      target: {kind: Deployment, name: batch-analytics}
-    - type: PatchResourceLimits
-      target: {kind: Deployment, name: batch-analytics}
-  forbiddenActions:
-    - type: ScaleWorkload
-      target: {kind: Deployment, name: inventory}
-    - type: RestartWorkload
-      target: {kind: Deployment, name: inventory}
+    - {type: ScaleWorkload, target: {kind: Deployment, name: batch-analytics}}
+    - {type: PatchResourceLimits, target: {kind: Deployment, name: batch-analytics}}
+  forbiddenActions: [{type: ScaleWorkload, target: {kind: Deployment, name: inventory}}, {type: RestartWorkload, target: {kind: Deployment, name: inventory}}]
   restraintExpected: false
+  fixPredicate: >-
+    sum(rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"batch-analytics-.*"}[2m])) < 0.2
+    or on() absent(container_cpu_usage_seconds_total{namespace="shop",pod=~"batch-analytics-.*"})
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="inventory"} < 1
 timeoutMinutes: 2

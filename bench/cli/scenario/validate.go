@@ -39,6 +39,17 @@ var severities = []praxisv1alpha1.Severity{"Critical", "High", "Medium", "Low"}
 // rootCauseIDPattern is the id shape §17.3 matching keys use.
 var rootCauseIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+// evidenceSources is the closed set of evidence-id source tokens — the §6
+// evidence type enum, lowercased (ADR-005). A pattern naming any other
+// token demands evidence the Phase 3 collector will never produce.
+var evidenceSources = []string{
+	"podstatus", "event", "ownerchain", "metric", "logtemplate", "syncstate", "gitcommit",
+}
+
+// evidencePatternShape is the ev/<source>-<glob> form §17.3 patterns take
+// (LLD §6 id scheme: ev/<source>-<seq>).
+var evidencePatternShape = regexp.MustCompile(`^ev/([a-z]+)-(\S+)$`)
+
 // problems accumulates violations so one Load reports every mistake in the
 // file, not just the first.
 type problems struct {
@@ -154,6 +165,9 @@ func (s *Scenario) validateGroundTruth(p *problems) {
 		p.addf("groundTruth.rootCauseId", "is %q; must be a lowercase id matching %s", gt.RootCauseID, rootCauseIDPattern)
 	}
 
+	validateDiagnosis(p, &gt.Diagnosis)
+	validatePredicates(p, gt)
+
 	validateActionRefs(p, "groundTruth.acceptableActions", gt.AcceptableActions)
 	validateActionRefs(p, "groundTruth.forbiddenActions", gt.ForbiddenActions)
 
@@ -178,6 +192,67 @@ func (s *Scenario) validateGroundTruth(p *problems) {
 					"%s contradicts acceptableActions — the same action cannot be both", describe(f))
 			}
 		}
+	}
+}
+
+// validateDiagnosis enforces the §17.3 matching rule (ADR-005): both lists
+// present and non-empty, patterns in ev/<source>-* form over the closed
+// source-token set, keyphrases canonical lowercase, nothing blank or
+// duplicated — the answer key must be usable exactly as authored.
+func validateDiagnosis(p *problems, d *DiagnosisRule) {
+	if len(d.RequiredEvidenceIDPatterns) == 0 {
+		p.addf("groundTruth.diagnosis.requiredEvidenceIdPatterns",
+			"required — at least one ev/<source>-* pattern the correct diagnosis must cite (LLD §17.3, ADR-005)")
+	}
+	seenPat := map[string]bool{}
+	for i, pat := range d.RequiredEvidenceIDPatterns {
+		field := fmt.Sprintf("groundTruth.diagnosis.requiredEvidenceIdPatterns[%d]", i)
+		m := evidencePatternShape.FindStringSubmatch(pat)
+		switch {
+		case m == nil:
+			p.addf(field, "is %q; must have the form ev/<source>-<glob> (the §6 id scheme, e.g. ev/gitcommit-*)", pat)
+		case !slices.Contains(evidenceSources, m[1]):
+			p.addf(field, "source %q is not an evidence type; the closed set is %s (§6 types lowercased, ADR-005)",
+				m[1], strings.Join(evidenceSources, ", "))
+		}
+		if seenPat[pat] {
+			p.addf(field, "duplicate pattern %q", pat)
+		}
+		seenPat[pat] = true
+	}
+
+	if len(d.RequiredSummaryKeyphrases) == 0 {
+		p.addf("groundTruth.diagnosis.requiredSummaryKeyphrases",
+			"required — at least one lowercase substring the correct summary must contain (LLD §17.3, ADR-005)")
+	}
+	seenKey := map[string]bool{}
+	for i, key := range d.RequiredSummaryKeyphrases {
+		field := fmt.Sprintf("groundTruth.diagnosis.requiredSummaryKeyphrases[%d]", i)
+		switch {
+		case strings.TrimSpace(key) != key || len(key) < 3:
+			p.addf(field, "is %q; keyphrases must be at least 3 characters with no leading/trailing space — matching is exact substring", key)
+		case key != strings.ToLower(key):
+			p.addf(field, "is %q; keyphrases are stored lowercase (matching is case-insensitive, lowercase is canonical)", key)
+		}
+		if seenKey[key] {
+			p.addf(field, "duplicate keyphrase %q", key)
+		}
+		seenKey[key] = true
+	}
+}
+
+// validatePredicates enforces that the effect-side ground truth exists now
+// even though nothing evaluates it before Phase 5 (ADR-005). Content is
+// not parsed: PromQL parsing would drag a Prometheus dependency into the
+// bench module for no Phase 2 benefit.
+func validatePredicates(p *problems, gt *GroundTruth) {
+	if strings.TrimSpace(gt.FixPredicate) == "" {
+		p.addf("groundTruth.fixPredicate",
+			"required — the PromQL declaring what \"fixed\" means for this scenario (evaluated from Phase 5; ADR-005)")
+	}
+	if strings.TrimSpace(gt.HarmPredicate) == "" {
+		p.addf("groundTruth.harmPredicate",
+			"required — the PromQL declaring what \"harmed\" means for this scenario (evaluated from Phase 5; ADR-005)")
 	}
 }
 

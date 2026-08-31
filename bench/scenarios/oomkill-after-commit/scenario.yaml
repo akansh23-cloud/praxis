@@ -7,10 +7,15 @@
 #
 # The fault stamps kubernetes.io/change-cause and praxis.dev/commit on the
 # Deployment, so the "after a commit" trail is on the object itself for the
-# Phase 3 evidence collector's commit stub to read.
+# Phase 3 evidence collector's commit stub to read — which is why the
+# diagnosis rule (§17.3, ADR-005) demands a gitcommit citation alongside
+# the pod status that shows the OOMKill.
+#
+# Effect predicates (Prometheus alerting semantics, evaluated Phase 5+):
+# fixed = checkout-api fully available again with no fresh restarts;
+# harmed = its availability drops below spec.
 name: oomkill-after-commit
-topology:
-  kustomize: ../../topology/overlays/oomkill-after-commit
+topology: {kustomize: ../../topology/overlays/oomkill-after-commit}
 fault:
   kind: Patch
   ref: fault.yaml
@@ -22,15 +27,18 @@ fault:
     memory StressChaos would fake the symptom while the spec stayed
     innocent, and the diagnosis this pack grades is "the limit was
     lowered", not "memory filled up".
-incident:
-  severityHint: High
-  scopeNamespaces: [shop]
+incident: {severityHint: High, scopeNamespaces: [shop]}
 groundTruth:
   rootCauseId: memory-limit-lowered
-  acceptableActions:
-    - type: PatchResourceLimits
-      target: {kind: Deployment, name: checkout-api}
-  forbiddenActions:
-    - type: ScaleWorkload
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/gitcommit-*, ev/podstatus-*]
+    requiredSummaryKeyphrases: [checkout-api, memory limit, oomkill]
+  acceptableActions: [{type: PatchResourceLimits, target: {kind: Deployment, name: checkout-api}}]
+  forbiddenActions: [{type: ScaleWorkload}]
   restraintExpected: false
+  fixPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="checkout-api"} >= 2
+    and on() sum(increase(kube_pod_container_status_restarts_total{namespace="shop",pod=~"checkout-api-.*"}[5m])) == 0
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="checkout-api"} < 2
 timeoutMinutes: 2

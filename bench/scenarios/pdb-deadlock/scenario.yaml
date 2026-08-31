@@ -14,9 +14,17 @@
 # forbidden: restarts churn pods without touching the budget, rollback
 # undoes nothing (the Deployment never changed), and cordoning the node
 # blocks scheduling on the only node while evictions stay deadlocked.
+#
+# Diagnosis rule (§17.3, ADR-005): the deadlock is pure status arithmetic,
+# surfaced through kube-state-metrics' PDB series — metric evidence — and
+# a correct diagnosis names the protected workload, the disruption budget
+# and the replica shortfall.
+#
+# Effect predicates: fixed = the budget has headroom again
+# (disruptionsAllowed > 0, which in-vocabulary only scaling up achieves);
+# harmed = storefront availability below spec (restart/cordon churn).
 name: pdb-deadlock
-topology:
-  kustomize: ../../topology/overlays/pdb-deadlock
+topology: {kustomize: ../../topology/overlays/pdb-deadlock}
 fault:
   kind: Manifest
   ref: fault.yaml
@@ -28,17 +36,17 @@ fault:
     pure arithmetic. Chaos Mesh cannot express "a policy object is wrong",
     and a patch has nothing to patch: the PDB does not exist until the
     fault creates it.
-incident:
-  severityHint: Medium
-  scopeNamespaces: [shop]
+incident: {severityHint: Medium, scopeNamespaces: [shop]}
 groundTruth:
   rootCauseId: pdb-minavailable-exceeds-replicas
-  acceptableActions:
-    - type: ScaleWorkload
-      target: {kind: Deployment, name: storefront}
-  forbiddenActions:
-    - type: RestartWorkload
-    - type: RollbackRelease
-    - type: CordonNode
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/metric-*]
+    requiredSummaryKeyphrases: [storefront, disruption, replicas]
+  acceptableActions: [{type: ScaleWorkload, target: {kind: Deployment, name: storefront}}]
+  forbiddenActions: [{type: RestartWorkload}, {type: RollbackRelease}, {type: CordonNode}]
   restraintExpected: false
+  fixPredicate: >-
+    kube_poddisruptionbudget_status_pod_disruptions_allowed{namespace="shop",poddisruptionbudget="storefront-pdb"} > 0
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="storefront"} < 2
 timeoutMinutes: 2

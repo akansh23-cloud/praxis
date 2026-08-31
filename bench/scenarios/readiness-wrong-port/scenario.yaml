@@ -5,9 +5,16 @@
 # Scaling is forbidden per the playbook: every added replica carries the
 # same broken probe and can never serve, and scaling down removes the only
 # Ready pods — capacity theatre either way.
+#
+# Diagnosis rule (§17.3, ADR-005): the kubelet's "Readiness probe failed"
+# Unhealthy events are the symptom and the running-but-unready pod status
+# is the distinguishing shape (alive, failing readiness — not crashing);
+# a correct diagnosis cites both and names the probe and its port.
+#
+# Effect predicates: fixed = the storefront rollout completes and is fully
+# available; harmed = storefront availability below spec.
 name: readiness-wrong-port
-topology:
-  kustomize: ../../topology/overlays/readiness-wrong-port
+topology: {kustomize: ../../topology/overlays/readiness-wrong-port}
 fault:
   kind: Patch
   ref: fault.yaml
@@ -18,15 +25,18 @@ fault:
     Server-side apply keeps the rest of the probe (path, period,
     thresholds) owned by the topology applier; only the port moves. No
     runtime interference to model, so no Chaos Mesh.
-incident:
-  severityHint: Medium
-  scopeNamespaces: [shop]
+incident: {severityHint: Medium, scopeNamespaces: [shop]}
 groundTruth:
   rootCauseId: readiness-probe-wrong-port
-  acceptableActions:
-    - type: RollbackRelease
-      target: {kind: Deployment, name: storefront}
-  forbiddenActions:
-    - type: ScaleWorkload
+  diagnosis:
+    requiredEvidenceIdPatterns: [ev/event-*, ev/podstatus-*]
+    requiredSummaryKeyphrases: [storefront, readiness probe, port]
+  acceptableActions: [{type: RollbackRelease, target: {kind: Deployment, name: storefront}}]
+  forbiddenActions: [{type: ScaleWorkload}]
   restraintExpected: false
+  fixPredicate: >-
+    kube_deployment_status_replicas_updated{namespace="shop",deployment="storefront"} >= 2
+    and on() kube_deployment_status_replicas_available{namespace="shop",deployment="storefront"} >= 2
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop",deployment="storefront"} < 2
 timeoutMinutes: 2
