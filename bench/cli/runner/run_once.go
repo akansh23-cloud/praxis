@@ -160,17 +160,35 @@ func (r *Runner) waitTopologyHealthy(ctx context.Context, timeout time.Duration)
 	return nil
 }
 
-// injectFault applies the scenario's fault. Session 2.1 exercises Manifest
-// (all the smoke scenario needs); Patch and ChaosMesh injection arrive with
-// the scenario packs they serve.
+// faultFieldManager is the server-side-apply field manager Patch faults use.
+// A distinct manager makes the fault's edit visible in managedFields — the
+// same forensic trail a real bad deploy would leave — and --force-conflicts
+// lets it take the contested fields from the topology's original applier.
+const faultFieldManager = "praxisbench-fault"
+
+// injectFault applies the scenario's fault into the first scope namespace.
+//
+// Manifest and ChaosMesh both create new objects with a plain apply — the
+// distinction is what the payload is (workload/policy YAML vs a Chaos Mesh
+// experiment the chaos controllers act on), and teardown treats ChaosMesh
+// specially. Patch mutates topology objects that already exist: the payload
+// is a partial manifest applied server-side, so the file itself carries the
+// target coordinates and only the fields the fault changes — the scenario
+// schema needs no extra target block (LLD §17).
 func (r *Runner) injectFault(ctx context.Context) error {
+	ns := r.scn.Incident.ScopeNamespaces[0]
+	r.out.f("    applying %s (%s) into namespace %q", r.scn.Fault.Ref, r.scn.Fault.Kind, ns)
 	switch r.scn.Fault.Kind {
-	case scenario.FaultManifest:
-		r.out.f("    applying %s (%s) into namespace %q", r.scn.Fault.Ref, r.scn.Fault.Kind, r.scn.Incident.ScopeNamespaces[0])
-		_, err := r.tc.Kubectl(ctx, "apply", "-n", r.scn.Incident.ScopeNamespaces[0], "-f", r.scn.FaultPath())
+	case scenario.FaultManifest, scenario.FaultChaosMesh:
+		_, err := r.tc.Kubectl(ctx, "apply", "-n", ns, "-f", r.scn.FaultPath())
+		return err
+	case scenario.FaultPatch:
+		_, err := r.tc.Kubectl(ctx, "apply", "--server-side",
+			"--field-manager", faultFieldManager, "--force-conflicts",
+			"-n", ns, "-f", r.scn.FaultPath())
 		return err
 	default:
-		return fmt.Errorf("fault kind %q is not implemented yet — the scenario-pack session (playbook 2.2) adds it alongside the packs that need it; smoke uses Manifest", r.scn.Fault.Kind)
+		return fmt.Errorf("fault kind %q has no injection implementation — the scenario loader and the runner have drifted apart", r.scn.Fault.Kind)
 	}
 }
 
@@ -264,9 +282,19 @@ func (r *Runner) awaitResponse(ctx context.Context, inc *praxisv1alpha1.Incident
 }
 
 // teardown deletes the scope namespaces and waits until they are gone, so
-// consecutive runs start from nothing.
+// consecutive runs start from nothing. For ChaosMesh scenarios the
+// experiment is deleted first, while its target pods still exist: the chaos
+// controller can then run its recovery step and release its finalizer
+// cleanly instead of racing the namespace deletion. Failure to pre-delete
+// is only a warning — namespace deletion remains the authority.
 func (r *Runner) teardown(ctx context.Context) error {
 	nss := r.scn.Incident.ScopeNamespaces
+	if r.scn.Fault.Kind == scenario.FaultChaosMesh {
+		if _, err := r.tc.Kubectl(ctx, "delete", "-n", nss[0], "-f", r.scn.FaultPath(),
+			"--ignore-not-found", "--timeout=90s"); err != nil {
+			r.out.f("    warning: deleting the chaos experiment before teardown failed (namespace deletion will finish the job): %v", err)
+		}
+	}
 	for _, ns := range nss {
 		if err := kube.DeleteNamespace(ctx, r.c, ns); err != nil {
 			return err
