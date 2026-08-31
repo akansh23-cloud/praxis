@@ -93,9 +93,16 @@ incident:
   scopeNamespaces: [shop]        # 1–10; created and torn down by the runner
 groundTruth:
   rootCauseId: smoke-inert-fault # lowercase id; §17.3 matching key
+  diagnosis:                     # §17.3 deterministic matching rule (ADR-005)
+    requiredEvidenceIdPatterns: [ev/podstatus-*]  # ev/<source>-* globs; closed §6 source tokens
+    requiredSummaryKeyphrases: [inert]            # lowercase substrings, ≥3 chars
   acceptableActions: []          # from the closed ActionType vocabulary
   forbiddenActions: []
   restraintExpected: true        # true ⇒ acceptableActions must be empty
+  fixPredicate: >-               # PromQL ground truth, alerting semantics;
+    vector(0) == 1               # evaluated only from Phase 5 on
+  harmPredicate: >-
+    kube_deployment_status_replicas_available{namespace="shop"} < kube_deployment_spec_replicas{namespace="shop"}
 timeoutMinutes: 2                # ≥1; bounds the wait for a response
 ```
 
@@ -114,14 +121,25 @@ and every problem in the file is reported in one pass):
 - `restraintExpected: true` forbids acceptable actions (the only correct
   answer is *no plan*), `false` requires at least one, and no action may
   be both acceptable and forbidden;
+- `groundTruth.diagnosis` (the §17.3 answer key, ADR-005) is required:
+  ≥1 evidence pattern in `ev/<source>-*` form over the closed source
+  tokens (`podstatus, event, ownerchain, metric, logtemplate, syncstate,
+  gitcommit` — the §6 evidence types, lowercased) and ≥1 lowercase
+  keyphrase (≥3 chars); blanks, duplicates, unknown tokens and
+  non-canonical case are rejected. Matching itself is Session 2.3's —
+  the packs only *declare* the rule;
+- `fixPredicate` and `harmPredicate` are required, non-empty PromQL
+  (Prometheus alerting semantics: true ⇔ ≥1 sample) — effect-side ground
+  truth declared now, evaluated only from Phase 5 on;
 - every shipped pack is loaded by a unit test, so a pack that drifts from
   the schema fails `make -C bench test` before it fails a run.
 
 To add a scenario:
 
 1. create `scenarios/<name>/scenario.yaml` plus a fault payload — every
-   shipped pack is 19–29 non-comment lines of YAML, and the loader test
-   walks new packs automatically;
+   shipped pack, §17.3 diagnosis rule and effect predicates included, is
+   26–29 non-comment lines of YAML, and the loader test walks new packs
+   automatically;
 2. point `topology.kustomize` at an existing overlay or add one under
    `topology/overlays/<name>/` (usually 9 lines: the base plus a
    scenario annotation);
@@ -137,8 +155,12 @@ To add a scenario:
 Each pack records why its fault mechanism was chosen in `fault.notes`
 (and header comments) — patches where the fault IS a spec change, plain
 manifests where the fault is an object arriving, Chaos Mesh only where it
-genuinely adds value (once, deliberately). `fixPredicate`/`harmPredicate`
-stay unset until the effect-side machinery lands in Phase 5.
+genuinely adds value (once, deliberately). Every pack also ships its full
+§17.3 answer key (`groundTruth.diagnosis`) and its effect-side
+`fixPredicate`/`harmPredicate` ground truth (ADR-005) — declared now,
+consumed by the 2.3 scorer and the Phase 5 effect machinery; the restraint
+pack's `fixPredicate` is deliberately unsatisfiable because no in-cluster
+action constitutes a fix.
 
 | Pack | Fault (mechanism) | Manifested check | Ground truth |
 |---|---|---|---|
