@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
+	"github.com/akansh23-cloud/praxis/bench/cli/faultcheck"
 	"github.com/akansh23-cloud/praxis/bench/cli/kube"
 	"github.com/akansh23-cloud/praxis/bench/cli/scenario"
 )
@@ -89,6 +90,24 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 
 	if err := r.phase(ctx, label+"inject-fault", func(ctx context.Context) error {
 		return r.injectFault(ctx)
+	}); err != nil {
+		return oc, err
+	}
+
+	// The fault must be observably manifested before the Incident is filed:
+	// a benchmark that cannot prove its own fault took hold would grade
+	// agents against noise (playbook Session 2.2 task 3).
+	if err := r.phase(ctx, label+"fault-manifested", func(ctx context.Context) error {
+		check, ok := faultcheck.Lookup(r.scn.Name)
+		if !ok {
+			return fmt.Errorf("scenario %q has no fault-manifested check registered — every pack must prove its fault without an agent; add one in bench/cli/faultcheck", r.scn.Name)
+		}
+		return check(ctx, faultcheck.Env{
+			Client:     r.c,
+			Tools:      r.tc,
+			Namespaces: r.scn.Incident.ScopeNamespaces,
+			Logf:       r.out.f,
+		})
 	}); err != nil {
 		return oc, err
 	}
