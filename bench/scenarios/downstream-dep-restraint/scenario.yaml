@@ -15,9 +15,14 @@
 # restraint scenarios admit no acceptable action at all.
 #
 # The fault check proves the outage from a pod's vantage point (kubectl
-# exec + `agnhost connect`, with a reachable-service positive control),
-# because node-originated traffic — kubelet probes, port-forwards — is NOT
-# partitioned; that asymmetry is what keeps the provider "healthy".
+# exec + `agnhost connect`, with a positive control against a storefront
+# pod), because node-originated traffic — kubelet probes, port-forwards —
+# is NOT partitioned; that asymmetry is what keeps the provider "healthy".
+# It targets the provider's POD endpoint: kind's kube-proxy masquerades
+# ClusterIP traffic, so the Service path arrives node-sourced and slips
+# through the pod-scoped partition. The pod endpoint is the sim's
+# modelled provider address; the Service-path caveat is recorded here
+# deliberately for the Phase 3 evidence session to weigh.
 name: downstream-dep-restraint
 topology:
   kustomize: ../../topology/overlays/downstream-dep-restraint

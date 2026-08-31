@@ -47,16 +47,23 @@ var networkChaosGVK = schema.GroupVersionKind{
 //  1. every payment-provider-sim pod is still Ready — NOTHING in-cluster
 //     looks broken;
 //  2. Chaos Mesh reports the partition fully injected (AllInjected=True);
-//  3. positive control: a connection from inside a checkout-api pod to
-//     storefront still succeeds, proving the probing machinery and
-//     in-cluster networking work — the failure in act 4 cannot be an
-//     artifact of a broken probe;
-//  4. the same connection attempt to the provider times out.
+//  3. positive control: a connection from inside a checkout-api pod to a
+//     storefront pod endpoint still succeeds, proving the probing
+//     machinery and pod networking work — the failure in act 4 cannot be
+//     an artifact of a broken probe;
+//  4. the same connection attempt to the provider's pod endpoint times
+//     out.
 //
-// The connection must originate INSIDE a shop pod (kubectl exec +
-// `agnhost connect`): the partition drops pod-to-pod traffic, while
-// kubelet probes and port-forward tunnels enter from the node and pass —
-// which is exactly why act 1 stays green.
+// Two vantage-point rules, both learned the hard way:
+//   - the connection must originate INSIDE a shop pod (kubectl exec +
+//     `agnhost connect`) — kubelet probes and port-forward tunnels enter
+//     from the node and are not partitioned, which is exactly why act 1
+//     stays green;
+//   - it must target the POD endpoint, not the Service: kind's kube-proxy
+//     masquerades DNAT'd ClusterIP traffic, so a service-path connection
+//     arrives with the node as source and sidesteps the pod-scoped
+//     partition. The sim's modelled "provider address" is its endpoint;
+//     the control uses the same addressing so the comparison stays fair.
 func downstreamDepRestraint(ctx context.Context, env Env) error {
 	ns := env.Namespaces[0]
 
@@ -80,23 +87,31 @@ func downstreamDepRestraint(ctx context.Context, env Env) error {
 		return err
 	}
 
-	if err := pollUntil(ctx, env, 2*time.Minute, "positive control: checkout-api still reaches storefront",
+	if err := pollUntil(ctx, env, 2*time.Minute, "positive control: checkout-api still reaches a storefront pod",
 		func(ctx context.Context) (bool, string, error) {
-			out, err := connectFromCheckout(ctx, env, ns, "storefront:80")
+			ip, status := podIPByApp(ctx, env, ns, "storefront")
+			if ip == "" {
+				return false, status, nil
+			}
+			out, err := connectFromCheckout(ctx, env, ns, ip+":8080")
 			if err != nil {
-				return false, fmt.Sprintf("control connection failed: %s", firstLine(out, err)), nil
+				return false, fmt.Sprintf("control connection to storefront pod %s failed: %s", ip, firstLine(out, err)), nil
 			}
 			return true, "", nil
 		}); err != nil {
 		return err
 	}
 
-	return pollUntil(ctx, env, 3*time.Minute, "a connection from checkout-api to the provider timing out",
+	return pollUntil(ctx, env, 3*time.Minute, "a connection from checkout-api to the provider's pod timing out",
 		func(ctx context.Context) (bool, string, error) {
-			out, err := connectFromCheckout(ctx, env, ns, "payment-provider-sim:80")
+			ip, status := podIPByApp(ctx, env, ns, "payment-provider-sim")
+			if ip == "" {
+				return false, status, nil
+			}
+			out, err := connectFromCheckout(ctx, env, ns, ip+":8080")
 			broken, status := classifyConnect(out, err != nil)
 			if broken {
-				env.Logf("    connect to payment-provider-sim from checkout-api: TIMEOUT (packets dropped)")
+				env.Logf("    connect to payment-provider-sim pod %s from checkout-api: TIMEOUT (packets dropped)", ip)
 			}
 			return broken, status, nil
 		})
@@ -107,6 +122,22 @@ func downstreamDepRestraint(ctx context.Context, env Env) error {
 func connectFromCheckout(ctx context.Context, env Env, ns, hostPort string) (string, error) {
 	return env.Tools.Kubectl(ctx, "exec", "-n", ns, "deploy/checkout-api", "-c", "checkout-api",
 		"--", "/agnhost", "connect", hostPort, connectTimeout)
+}
+
+// podIPByApp returns the pod IP of a Running pod of the given workload,
+// or ("", why-not).
+func podIPByApp(ctx context.Context, env Env, ns, app string) (string, string) {
+	var pods corev1.PodList
+	if err := env.Client.List(ctx, &pods, client.InNamespace(ns), byApp(app)); err != nil {
+		return "", fmt.Sprintf("list %s pods: %v", app, err)
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "" {
+			return pod.Status.PodIP, ""
+		}
+	}
+	return "", fmt.Sprintf("no Running %s pod with an IP yet", app)
 }
 
 // classifyConnect interprets an `agnhost connect` outcome. Only a TIMEOUT
