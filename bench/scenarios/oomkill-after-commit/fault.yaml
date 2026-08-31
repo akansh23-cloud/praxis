@@ -1,0 +1,27 @@
+# The "commit": a server-side-apply partial manifest that lowers the
+# session-cache memory limit far below its 40MiB working set. Applied with
+# kubectl apply --server-side --field-manager praxisbench-fault
+# --force-conflicts (runner Patch semantics), so ONLY the fields below
+# change; everything else stays owned by the topology's applier.
+#
+# 16Mi vs a 40MiB anonymous working set means the OOM kill is guaranteed:
+# the rollout's new pod dies during session-cache's allocation ramp, every
+# time. requests.memory drops with the limit to keep requests ≤ limits
+# valid — exactly what the modelled cost-trimming commit would have done.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  annotations:
+    kubernetes.io/change-cause: "commit 4be1f2a: trim session-cache memory to cut per-pod cost"
+    praxis.dev/commit: 4be1f2a9c31d
+spec:
+  template:
+    spec:
+      containers:
+        - name: session-cache
+          resources:
+            requests:
+              memory: 16Mi
+            limits:
+              memory: 16Mi

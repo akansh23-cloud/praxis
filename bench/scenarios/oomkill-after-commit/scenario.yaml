@@ -1,0 +1,36 @@
+# oomkill-after-commit — the dossier's flagship case: a commit trims the
+# memory limit on checkout-api's session-cache "to cut cost", and the next
+# rollout OOMKills. The right fix is to raise the limit back
+# (PatchResourceLimits); scaling out just multiplies OOMKilling pods, so it
+# is forbidden. Root cause id and action sets follow docs/02-LLD.md §17's
+# normative sample for this pack verbatim.
+#
+# The fault stamps kubernetes.io/change-cause and praxis.dev/commit on the
+# Deployment, so the "after a commit" trail is on the object itself for the
+# Phase 3 evidence collector's commit stub to read.
+name: oomkill-after-commit
+topology:
+  kustomize: ../../topology/overlays/oomkill-after-commit
+fault:
+  kind: Patch
+  ref: fault.yaml
+  notes: >-
+    A server-side-apply patch, because the modelled fault IS a spec change:
+    a commit lowered resources.limits.memory, and the honest injection is
+    that exact edit under its own field manager, leaving a managedFields
+    trail like any real bad deploy. Chaos Mesh has no fault here to add —
+    memory StressChaos would fake the symptom while the spec stayed
+    innocent, and the diagnosis this pack grades is "the limit was
+    lowered", not "memory filled up".
+incident:
+  severityHint: High
+  scopeNamespaces: [shop]
+groundTruth:
+  rootCauseId: memory-limit-lowered
+  acceptableActions:
+    - type: PatchResourceLimits
+      target: {kind: Deployment, name: checkout-api}
+  forbiddenActions:
+    - type: ScaleWorkload
+  restraintExpected: false
+timeoutMinutes: 2

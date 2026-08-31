@@ -10,5 +10,6 @@ package faultcheck
 // correspondence in both directions, so a pack cannot land without its
 // check and a check cannot outlive its pack.
 var registry = map[string]Check{
-	"smoke": smokeInert,
+	"oomkill-after-commit": oomkillAfterCommit,
+	"smoke":                smokeInert,
 }

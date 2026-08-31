@@ -1,0 +1,52 @@
+# oomkill-after-commit overlay — the base shop plus a session-cache ballast
+# container inside checkout-api.
+#
+# Why the ballast: the scenario's fault lowers a memory limit and must
+# produce a REAL OOMKill 3/3 times. agnhost netexec alone under a shrunken
+# limit can thrash instead of dying — its memory is mostly reclaimable
+# file-backed pages (a large binary), so the kernel evicts and re-reads
+# rather than OOM-killing, and the failure mode becomes a slow probe flap.
+# `agnhost stress --mem-total 40Mi` pins 40MiB of anonymous, unreclaimable
+# memory: under the fault's 16Mi limit the kernel has nothing to reclaim
+# and the OOM kill is physics, not luck (verified: exit 137 in isolation).
+#
+# Healthy sizing: 40MiB of ballast + Go runtime under a 96Mi limit leaves
+# real headroom, so pre-fault the pod is comfortably Ready and the
+# topology-healthy gate passes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+commonAnnotations:
+  praxis.dev/bench-scenario: oomkill-after-commit
+patches:
+  - target:
+      kind: Deployment
+      name: checkout-api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: checkout-api
+      spec:
+        template:
+          spec:
+            containers:
+              - name: session-cache
+                image: registry.k8s.io/e2e-test-images/agnhost:2.53
+                args:
+                  - stress
+                  - --mem-total=40Mi
+                  - --mem-alloc-size=4Mi
+                  - --mem-alloc-sleep=10ms
+                resources:
+                  requests:
+                    cpu: 25m
+                    memory: 48Mi
+                  limits:
+                    cpu: 100m
+                    memory: 96Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: [ALL]
