@@ -1,0 +1,118 @@
+/*
+Copyright 2026 The Praxis Authors.
+Licensed under the Apache License, Version 2.0.
+*/
+
+package evidence
+
+import (
+	"fmt"
+
+	"github.com/akansh23-cloud/praxis/internal/hash"
+)
+
+// This file defines the evidence bundle DATA TYPES of docs/02-LLD.md §6 —
+// the parameter type the Agent seam (internal/agents, playbook Session 2.3)
+// is defined over. Only the types and their hash live here now: collection,
+// assembly, size caps, ordering, redaction and ConfigMap storage are the
+// Phase 3 collector's job (playbook Session 3.1) and are deliberately NOT
+// implemented in Phase 2.
+
+// SchemaVersion is the bundle schema version of LLD §6.
+const SchemaVersion = "1"
+
+// ItemType is the closed set of §6 evidence types. Closed like the action
+// vocabulary (ADR-001): §17.3 diagnosis rules may only demand evidence of
+// these types (ADR-005), so a new type is a design decision, not a string.
+type ItemType string
+
+const (
+	ItemTypePodStatus   ItemType = "PodStatus"
+	ItemTypeEvent       ItemType = "Event"
+	ItemTypeOwnerChain  ItemType = "OwnerChain"
+	ItemTypeMetric      ItemType = "Metric"
+	ItemTypeLogTemplate ItemType = "LogTemplate"
+	ItemTypeSyncState   ItemType = "SyncState"
+	ItemTypeGitCommit   ItemType = "GitCommit"
+)
+
+// sourceTokens maps each §6 evidence type to the lowercase token its item
+// ids carry (LLD §6 id scheme ev/<source>-<seq>). ADR-005 fixes these
+// tokens as the closed set §17.3 evidence-id patterns are validated
+// against; the bench scenario loader enforces the same list, so an id
+// minted here is matchable by every well-formed answer key.
+var sourceTokens = map[ItemType]string{
+	ItemTypePodStatus:   "podstatus",
+	ItemTypeEvent:       "event",
+	ItemTypeOwnerChain:  "ownerchain",
+	ItemTypeMetric:      "metric",
+	ItemTypeLogTemplate: "logtemplate",
+	ItemTypeSyncState:   "syncstate",
+	ItemTypeGitCommit:   "gitcommit",
+}
+
+// ItemID renders the canonical §6 id for the seq-th item of a type,
+// e.g. ItemID(ItemTypeEvent, 3) == "ev/event-03".
+func ItemID(t ItemType, seq int) string {
+	return fmt.Sprintf("ev/%s-%02d", sourceTokens[t], seq)
+}
+
+// IncidentRef names the incident a bundle was collected for.
+type IncidentRef struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+// Item is one piece of evidence. In Phase 2 the data payload is a flat
+// string map — sufficient for the k8s Events the benchmark's stand-in
+// gatherer records; the Phase 3 collector owns evolving payloads into the
+// full schema-versioned §6 form.
+type Item struct {
+	// ID is the §6 evidence id, ev/<source>-<seq>, assigned by the
+	// producer after sorting so identical state yields identical ids.
+	ID string `json:"id"`
+
+	Type ItemType `json:"type"`
+
+	// Source names the system observed: k8s, prometheus, loki, argocd, flux.
+	Source string `json:"source"`
+
+	Data map[string]string `json:"data"`
+
+	Redacted bool `json:"redacted"`
+}
+
+// Data keys for ItemTypeEvent items — the Phase 2 minimal payload contract
+// shared by the bench gatherer (writer) and the rule-based baseline
+// (reader). One definition here so the two cannot drift.
+const (
+	EventDataType              = "type"    // corev1.EventTypeNormal | Warning
+	EventDataReason            = "reason"  // e.g. Failed, Unhealthy, BackOff
+	EventDataMessage           = "message" // the kubelet's own words
+	EventDataInvolvedKind      = "involvedKind"
+	EventDataInvolvedName      = "involvedName"
+	EventDataInvolvedNamespace = "involvedNamespace"
+	EventDataCount             = "count"
+)
+
+// Bundle is the §6 evidence document: everything an Agent is allowed to
+// know beyond the Incident itself. There is deliberately no cluster client
+// anywhere near the Agent seam — if it is not in the bundle, the agent
+// cannot see it.
+type Bundle struct {
+	Version     string      `json:"version"`
+	Incident    IncidentRef `json:"incident"`
+	CollectedAt string      `json:"collectedAt"` // RFC 3339
+	Items       []Item      `json:"items"`
+}
+
+// Hash returns the §6 bundle hash — sha256 over the RFC 8785 canonical
+// JSON of the bundle, in the "sha256:<hex>" form
+// RemediationPlanSpec.EvidenceBundleHash requires.
+func (b *Bundle) Hash() (string, error) {
+	canonical, err := hash.CanonicalJSON(b)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize evidence bundle: %w", err)
+	}
+	return hash.SHA256Prefixed(canonical), nil
+}
