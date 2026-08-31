@@ -33,12 +33,17 @@ var allowedImportPrefixes = []string{
 
 // forbiddenImportSubstrings name the classes of dependency whose absence
 // is the point, so a violation fails with a message that says why.
+const (
+	whyNoClient = "agents must not hold a cluster client — evidence arrives only via the bundle"
+	whyNoSDK    = "no model SDK before Phase 3 (and never in the seam definition)"
+)
+
 var forbiddenImportSubstrings = map[string]string{
-	"client-go":          "agents must not hold a cluster client — evidence arrives only via the bundle",
-	"controller-runtime": "agents must not hold a cluster client — evidence arrives only via the bundle",
-	"anthropic":          "no model SDK before Phase 3 (and never in the seam definition)",
-	"openai":             "no model SDK before Phase 3 (and never in the seam definition)",
-	"ollama":             "no model SDK before Phase 3 (and never in the seam definition)",
+	"client-go":          whyNoClient,
+	"controller-runtime": whyNoClient,
+	"anthropic":          whyNoSDK,
+	"openai":             whyNoSDK,
+	"ollama":             whyNoSDK,
 	"/bench":             "the main module must never depend on the benchmark",
 }
 
