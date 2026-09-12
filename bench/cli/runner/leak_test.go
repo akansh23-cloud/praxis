@@ -14,7 +14,9 @@ import (
 
 	"github.com/akansh23-cloud/praxis/bench/cli/agentrun"
 	"github.com/akansh23-cloud/praxis/bench/cli/scenario"
+	llmagent "github.com/akansh23-cloud/praxis/internal/agents/llm"
 	"github.com/akansh23-cloud/praxis/internal/evidence"
+	"github.com/akansh23-cloud/praxis/internal/llm/llmtest"
 )
 
 // loadAllPacks loads every shipped scenario, so these tests cover packs
@@ -142,5 +144,47 @@ func TestAssertScenarioBlindCatchesPlants(t *testing.T) {
 
 	if err := assertScenarioBlind(scn, base()); err != nil {
 		t.Fatalf("clean inputs must pass the guard: %v", err)
+	}
+}
+
+// TestLLMAgentPromptsCarryNoBenchmarkIdentity closes the anti-cheating
+// loop at the model boundary: for EVERY shipped pack, drive the real LLM
+// agent over a scripted model with the exact inputs the runner would hand
+// it, then assert the recorded prompts — everything the model would
+// see — carry no scenario name, no rootCauseId, no groundTruth marker and
+// no answer-key field name.
+func TestLLMAgentPromptsCarryNoBenchmarkIdentity(t *testing.T) {
+	const hypotheses = `{"hypotheses":[{"summary":"a pod is failing to pull its image","confidencePercent":60,"citations":["ev/event-01"]}]}`
+	const plan = `{"verdict":"plan","noActionReason":"","plan":{"actions":[{"type":"RollbackRelease","target":{"kind":"Deployment","namespace":"shop","name":"checkout-api"}}],` +
+		`"verification":{"predicate":"kube_deployment_status_replicas_available{namespace=\"shop\",deployment=\"checkout-api\"} >= 1","window":"5m","onFailure":"Escalate"},"rollback":{"strategy":"None"}}}`
+	for _, scn := range loadAllPacks(t) {
+		t.Run(scn.Name, func(t *testing.T) {
+			inc := agentrun.SanitizeIncident(buildIncident(scn, 1, time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)))
+			bundle := realisticBundle(&evidence.IncidentRef{Name: inc.Name, UID: "uid-1"})
+			model := llmtest.New(hypotheses, plan)
+			ag := llmagent.New(model)
+			hyps, err := ag.Analyze(t.Context(), inc, bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := ag.Plan(t.Context(), inc, bundle, hyps); err != nil {
+				t.Fatal(err)
+			}
+			var prompts strings.Builder
+			for _, call := range model.Calls {
+				prompts.WriteString(call.System)
+				prompts.WriteString(call.User)
+			}
+			lower := strings.ToLower(prompts.String())
+			for _, token := range []string{
+				strings.ToLower(scn.Name), strings.ToLower(scn.GroundTruth.RootCauseID), "groundtruth",
+				"requiredevidenceidpatterns", "requiredsummarykeyphrases", "acceptableactions", "forbiddenactions",
+				"fixpredicate", "harmpredicate", "praxis.dev/bench",
+			} {
+				if strings.Contains(lower, token) {
+					t.Errorf("model input carries benchmark identity %q", token)
+				}
+			}
+		})
 	}
 }

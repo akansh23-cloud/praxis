@@ -43,7 +43,25 @@ const (
 	// ResponseTimeout: the wait ended with none of the above — expected
 	// with --agent none.
 	ResponseTimeout ResponseKind = "NoResponse"
+	// ResponseAnalysisRejected: the deterministic guards refused the
+	// agent's analysis before any plan was created (ADR-009) — a
+	// hypothesis cited evidence the bundle does not hold (CitationInvalid)
+	// or the planner's output failed the CRD schema twice (SchemaInvalid).
+	// The Incident carries praxis.dev/analysis-rejected; Record.RejectionReason
+	// names which. A recorded outcome: diagnosis false, restraint incorrect.
+	ResponseAnalysisRejected ResponseKind = "AnalysisRejected"
 )
+
+// Usage is an agent's model accounting for one run, when it has any.
+type Usage struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model"`
+	Calls        int     `json:"calls"`
+	InputTokens  int64   `json:"inputTokens"`
+	OutputTokens int64   `json:"outputTokens"`
+	CostUSD      float64 `json:"costUSD"`
+	CostKnown    bool    `json:"costKnown"`
+}
 
 // IncidentMeta locates the run's Incident for later inspection.
 type IncidentMeta struct {
@@ -80,10 +98,27 @@ type Record struct {
 	Response Response     `json:"response"`
 
 	// Hypotheses are the agent's ranked output from Analyze, exactly as
-	// returned through the seam; diagnosis top-1/top-3 judge these.
-	Hypotheses []praxisv1alpha1.Hypothesis `json:"hypotheses,omitempty"`
+	// returned through the seam and validated (every citation resolves in
+	// the bundle); diagnosis top-1/top-3 judge these. A refused analysis
+	// leaves them empty: RefusedHypotheses keeps what was refused, for
+	// forensics, and is never scored.
+	Hypotheses        []praxisv1alpha1.Hypothesis `json:"hypotheses,omitempty"`
+	RefusedHypotheses []praxisv1alpha1.Hypothesis `json:"refusedHypotheses,omitempty"`
+
+	// RejectionReason names why an analysis was refused
+	// (ResponseAnalysisRejected): CitationInvalid or SchemaInvalid.
+	RejectionReason string `json:"rejectionReason,omitempty"`
 
 	NoActionReason string `json:"noActionReason,omitempty"`
+
+	// The evidence the agent analyzed — the real collector's bundle —
+	// and the agent's audit trail: model accounting and the annotations
+	// written onto the plan (prompt hash, model).
+	BundleHash      string            `json:"bundleHash,omitempty"`
+	BundleItems     int               `json:"bundleItems,omitempty"`
+	BundleBytes     int               `json:"bundleBytes,omitempty"`
+	Usage           *Usage            `json:"usage,omitempty"`
+	PlanAnnotations map[string]string `json:"planAnnotations,omitempty"`
 
 	// Plan is the spec as read back from the cluster (ResponsePlan), or
 	// as returned by the agent when the API server rejected it

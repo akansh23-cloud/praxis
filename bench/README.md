@@ -190,6 +190,33 @@ Phase 3's LLM agent revisits the budgets if real inference needs them.
 `--agent none` — nothing responds; the run records a graceful
 `NoResponse` timeout. This is the Session 2.1/2.2 behavior, unchanged.
 
+`--agent llm` — the **model-backed agent** of Phase 3 (Session 3.3,
+`internal/agents/llm`), driven through the same seam over the same real
+evidence bundle. The provider and model are flags (`--llm-provider`
+`anthropic` or `ollama`, `--llm-model`, `--llm-base-url`, `--llm-effort`);
+the Anthropic credential is read from `ANTHROPIC_API_KEY` in the
+environment and never from a flag. The agent's whole world is the sanitized
+Incident and the bundle, rendered as delimited DATA under fixed
+instructions; its hypotheses must cite ids the bundle holds (deterministic
+check, no retry — a miss is an `AnalysisRejected` run with reason
+`CitationInvalid` and the `praxis.dev/analysis-rejected` annotation on the
+Incident, never a plan), and its plan is constrained by the CRD-derived
+schema and validated by the API server's own rules before creation (one
+retry on violation, then `AnalysisRejected`/`SchemaInvalid`). A persisted
+plan carries `praxis.dev/prompt-hash` and `praxis.dev/model`; the run
+record carries tokens and cost.
+
+**The bundle every agent sees is the real one.** Since Session 3.3 the
+benchmark has no evidence implementation of its own: `cli/agentrun` calls
+`evidence.Collector.Collect` — the same collectors, caps, canonical bytes,
+ids, hash and credential scrubber the Praxis manager persists — over the
+secretless `evidence.Reader` wrapping the bench client. Pass
+`--prometheus-url` / `--loki-url` (port-forwards of the `monitoring`
+services) to include Metric and LogTemplate evidence; without them the
+bundle honestly omits those types. `cli/agentrun/evidence_boundary_test.go`
+plants credentials in every channel and raw lines behind the Loki seam
+and proves none of it reaches the (fake) model.
+
 `--agent rulebased` — the **intentionally dumb baseline** of FR-P2-04
 (`internal/agents/rulebased`), driven in-process through the Agent seam
 of LLD §5 (`internal/agents`: `Analyze` then `Plan`). Its entire
@@ -210,8 +237,11 @@ must beat it, and improving it is a bug, not a contribution
 (`internal/agents/rulebased/doc.go`).
 
 **Agents cannot cheat.** The seam's inputs — a sanitized Incident and
-the evidence bundle — are the agent's entire observable world, and four
-layers keep benchmark identity out of them: (1) the Incident's name and
+the evidence bundle — are the agent's entire observable world, and five
+layers keep benchmark identity out of them (the fifth, since Session 3.3:
+`runner/leak_test.go` drives the LLM agent over a scripted model for every
+pack and asserts the recorded prompts carry no scenario name, rootCauseId,
+groundTruth marker or answer-key field name): (1) the Incident's name and
 description are scenario-neutral by construction, identical wording for
 every pack, with the forensic `praxis.dev/bench-scenario` label stripped
 before the seam; (2) `cli/agentrun` may not import the scenario package
@@ -246,8 +276,15 @@ metrics (FR-P2-03):
   `forbiddenActions`.
 - **restraint correctness** — the response kind agrees with
   `restraintExpected`: no-action where restraint is the answer, a
-  persisted plan where acting is. Timeouts and rejected plans satisfy
-  neither.
+  persisted plan where acting is. Timeouts, rejected plans and refused
+  analyses satisfy neither.
+- **analysis rejections** (`AnalysisRejected`, Session 3.3) — the
+  deterministic guards refused the agent's analysis before any plan
+  existed: `rejectionReason` is `CitationInvalid` (a hypothesis cited an
+  id the bundle does not hold; the refused hypotheses are kept under
+  `refusedHypotheses` and never scored) or `SchemaInvalid` (the planner's
+  output failed the CRD schema on its single retry; plan validity is
+  judged false).
 - **time-to-plan** — Incident filed → plan or no-action verdict
   observed.
 
@@ -290,12 +327,12 @@ by every scenario's overlay (they all include the base) and changed no
 answer key: the fault-manifested checks and the rule-based baseline's
 numbers are unaffected (re-verified mechanically in Session 3.2).
 
-The benchmark itself still gathers its stand-in bundle (warning Events
-only, `cli/agentrun/gather.go`) for the agents it drives; the real
-collector — with Prometheus and Loki — runs in the Praxis manager. To
-see a real bundle against the bench topology, run the manager on the
-host against `bench/.praxis-bench.kubeconfig` with `--prometheus-url` and
-`--loki-url` pointed at port-forwards of the `monitoring` services and
+The benchmark gathers evidence through the real collector for the agents
+it drives (`--prometheus-url` / `--loki-url` add the telemetry seams);
+the manager, when it runs against the same cluster, persists an
+independently collected bundle. To see the manager's bundle against the
+bench topology, run it on the host against `bench/.praxis-bench.kubeconfig`
+with both URLs pointed at port-forwards of the `monitoring` services and
 run a scenario with `--keep`: the Incident's `status.evidenceBundleRef`
 names the ConfigMap holding it.
 

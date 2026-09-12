@@ -47,6 +47,16 @@ func Compute(rec *Record, gt *scenario.GroundTruth) Score {
 	case ResponseNoAction:
 		waited := rec.Response.WaitedSeconds
 		s.TimeToPlanSeconds = &waited
+	case ResponseAnalysisRejected:
+		// The deterministic guards refused the analysis: no plan existed,
+		// the refused hypotheses are not scored (Hypotheses is empty by
+		// contract), restraint is incorrect either way. A planner that
+		// failed the schema twice is judged schema-invalid; a citation
+		// failure never reached a plan, so plan validity stays nil.
+		if rec.RejectionReason == praxisv1alpha1.ReasonSchemaInvalid {
+			valid := false
+			s.PlanSchemaValid = &valid
+		}
 	case ResponseTimeout:
 		// No response: every denominator-gated metric stays nil.
 	}

@@ -28,7 +28,12 @@ import (
 	"github.com/akansh23-cloud/praxis/bench/cli/scenario"
 	"github.com/akansh23-cloud/praxis/bench/cli/scoring"
 	"github.com/akansh23-cloud/praxis/internal/agents"
+	llmagent "github.com/akansh23-cloud/praxis/internal/agents/llm"
 	"github.com/akansh23-cloud/praxis/internal/agents/rulebased"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
+	"github.com/akansh23-cloud/praxis/internal/evidence/logs"
+	"github.com/akansh23-cloud/praxis/internal/llm"
+	"github.com/akansh23-cloud/praxis/internal/llm/providers"
 )
 
 const (
@@ -45,6 +50,16 @@ const (
 	// AgentRuleBased is the intentionally dumb baseline of FR-P2-04,
 	// driven in-process through the Agent seam (internal/agents).
 	AgentRuleBased = "rulebased"
+
+	// AgentLLM is the model-backed agent of Phase 3 (Session 3.3),
+	// driven through the same seam over the same real evidence bundle.
+	// Provider and model are configuration (--llm-provider, --llm-model);
+	// the Anthropic credential is read from ANTHROPIC_API_KEY and never
+	// from a flag.
+	AgentLLM = "llm"
+
+	// apiKeyEnv is the only place an Anthropic credential is read from.
+	apiKeyEnv = "ANTHROPIC_API_KEY"
 
 	// kubeconfigName is the benchmark-owned kubeconfig inside bench/,
 	// covered by the repository's *.kubeconfig gitignore rule. Keeping it
@@ -63,20 +78,88 @@ type Options struct {
 	// ResultsDir receives one JSONL file of scored run records per
 	// invocation; empty means <bench>/results.
 	ResultsDir string
+
+	// PrometheusURL and LokiURL feed the real evidence collector's
+	// telemetry seams, exactly like the manager's flags; empty means the
+	// bundle honestly omits Metric / LogTemplate evidence.
+	PrometheusURL string
+	LokiURL       string
+
+	// The LLM agent's configuration (--agent llm). Provider defaults to
+	// anthropic, model to claude-opus-5; the credential comes from the
+	// environment.
+	LLMProvider string
+	LLMModel    string
+	LLMBaseURL  string
+	LLMEffort   string
 }
 
 // agentFor maps the --agent flag to a seam implementation; nil means
 // nothing responds (the Session 2.1/2.2 behavior, unchanged).
-func agentFor(name string) (agents.Agent, error) {
-	switch name {
+func agentFor(opts Options) (agents.Agent, error) {
+	switch opts.Agent {
 	case AgentNone:
 		return nil, nil
 	case AgentRuleBased:
 		return rulebased.New(), nil
+	case AgentLLM:
+		modelClient, err := llmClientFor(opts)
+		if err != nil {
+			return nil, err
+		}
+		return llmagent.New(modelClient), nil
 	default:
-		return nil, fmt.Errorf("unknown agent %q: available agents are %q and %q (the LLM agent arrives in Phase 3)",
-			name, AgentNone, AgentRuleBased)
+		return nil, fmt.Errorf("unknown agent %q: available agents are %q, %q and %q",
+			opts.Agent, AgentNone, AgentRuleBased, AgentLLM)
 	}
+}
+
+// llmClientFor builds the configured model client. The API key is read
+// from the environment here and handed to the client's config — it never
+// appears in a flag, a log line or a record.
+func llmClientFor(opts Options) (llm.Client, error) {
+	cfg := llm.Config{
+		Provider: opts.LLMProvider,
+		Model:    opts.LLMModel,
+		BaseURL:  opts.LLMBaseURL,
+		Effort:   opts.LLMEffort,
+	}
+	if cfg.Provider == "" {
+		cfg.Provider = llm.ProviderAnthropic
+	}
+	if cfg.Model == "" && cfg.Provider == llm.ProviderAnthropic {
+		cfg.Model = "claude-opus-5"
+	}
+	if cfg.Provider == llm.ProviderAnthropic {
+		cfg.APIKey = os.Getenv(apiKeyEnv)
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("--agent llm with provider %s needs %s in the environment (it is never a flag)", cfg.Provider, apiKeyEnv)
+		}
+	}
+	return providers.New(cfg)
+}
+
+// collectorFor builds the REAL evidence collector over the benchmark's
+// client: the secretless Reader wraps it, so the collector cannot ask for
+// a Secret however privileged the bench kubeconfig is; the telemetry
+// seams come from flags, like the manager's.
+func collectorFor(c client.Client, opts Options) (*evidence.Collector, error) {
+	collector := &evidence.Collector{Reader: evidence.NewReader(c)}
+	if opts.PrometheusURL != "" {
+		qc, err := evidence.NewHTTPQueryClient(opts.PrometheusURL)
+		if err != nil {
+			return nil, err
+		}
+		collector.Prom = qc
+	}
+	if opts.LokiURL != "" {
+		lc, err := logs.NewHTTPClient(opts.LokiURL)
+		if err != nil {
+			return nil, err
+		}
+		collector.Logs = lc
+	}
+	return collector, nil
 }
 
 // ScenarioAll is the --scenario value that runs every pack under
@@ -95,7 +178,8 @@ type Runner struct {
 	c        client.Client
 	timings  []timing
 
-	agent       agents.Agent // nil for --agent none
+	agent       agents.Agent        // nil for --agent none
+	collector   *evidence.Collector // the real pipeline, built once per run
 	resultsFile *os.File
 	resultsPath string
 	records     []scoring.Record
@@ -103,7 +187,7 @@ type Runner struct {
 
 // Run executes `praxisbench run`.
 func Run(ctx context.Context, opts Options, w io.Writer) error {
-	ag, err := agentFor(opts.Agent)
+	ag, err := agentFor(opts)
 	if err != nil {
 		return err
 	}
@@ -219,6 +303,17 @@ func (r *Runner) run(ctx context.Context) error {
 		return err
 	}
 	r.c = c
+	if r.collector, err = collectorFor(c, r.opts); err != nil {
+		return err
+	}
+	if r.agent != nil {
+		if r.opts.PrometheusURL == "" {
+			r.out.f("    no --prometheus-url: bundles will carry no Metric evidence")
+		}
+		if r.opts.LokiURL == "" {
+			r.out.f("    no --loki-url: bundles will carry no LogTemplate evidence")
+		}
+	}
 
 	outcomes := make([]outcome, 0, len(r.scns)*r.opts.Runs)
 	for _, scn := range r.scns {

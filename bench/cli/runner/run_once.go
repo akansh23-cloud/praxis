@@ -135,7 +135,7 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 	if r.agent != nil {
 		if err := r.phase(ctx, label+"agent-respond", func(ctx context.Context) error {
 			var err error
-			agentReport, err = agentrun.Respond(ctx, r.c, r.agent, inc, r.out.f)
+			agentReport, err = agentrun.Respond(ctx, r.c, r.collector, r.agent, inc, r.out.f)
 			if err != nil {
 				return err
 			}
@@ -145,7 +145,16 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 		}
 	}
 
-	if agentReport != nil && agentReport.PlanCreateError != "" {
+	switch {
+	case agentReport != nil && agentReport.Rejection != nil:
+		// The deterministic guards refused the analysis before any plan
+		// existed (ADR-009): that IS the run's outcome.
+		oc.Response = response{
+			Kind:   scoring.ResponseAnalysisRejected,
+			Detail: agentReport.Rejection.Detail,
+			Waited: time.Since(filedAt),
+		}
+	case agentReport != nil && agentReport.PlanCreateError != "":
 		// The agent answered and the API server refused the plan: that IS
 		// the run's outcome; there is nothing left to wait for.
 		oc.Response = response{
@@ -153,14 +162,15 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 			Detail: "API server rejected the proposed plan",
 			Waited: time.Since(filedAt),
 		}
-	} else if err := r.phase(ctx, label+"await-response", func(ctx context.Context) error {
-		var err error
-		oc.Response, err = r.awaitResponse(ctx, inc, filedAt)
-		return err
-	}); err != nil {
-		return oc, err
+	default:
+		if err := r.phase(ctx, label+"await-response", func(ctx context.Context) error {
+			var err error
+			oc.Response, err = r.awaitResponse(ctx, inc, filedAt)
+			return err
+		}); err != nil {
+			return oc, err
+		}
 	}
-
 	// Score before teardown, but never at the cost of teardown: an error
 	// here returns through the deferred cleanup above, so a scorer
 	// failure cannot leak namespaces or benchmark resources.
@@ -383,7 +393,24 @@ func (r *Runner) recordRun(n int, filedAt time.Time, inc *praxisv1alpha1.Inciden
 	}
 	if report != nil {
 		rec.Hypotheses = report.Hypotheses
+		rec.RefusedHypotheses = report.RefusedHypotheses
 		rec.PlanCreateError = report.PlanCreateError
+		rec.BundleHash = report.BundleHash
+		rec.BundleBytes = report.BundleBytes
+		if report.Bundle != nil {
+			rec.BundleItems = len(report.Bundle.Items)
+		}
+		if report.Rejection != nil {
+			rec.RejectionReason = report.Rejection.Reason
+		}
+		if report.Usage != nil {
+			rec.Usage = &scoring.Usage{
+				Provider: report.Usage.Provider, Model: report.Usage.Model, Calls: report.Usage.Calls,
+				InputTokens: report.Usage.InputTokens, OutputTokens: report.Usage.OutputTokens,
+				CostUSD: report.Usage.CostUSD, CostKnown: report.Usage.CostKnown,
+			}
+		}
+		rec.PlanAnnotations = report.PlanAnnotations
 		if resp.Kind == scoring.ResponsePlanInvalid {
 			// The rejected spec never reached the cluster; record what the
 			// agent proposed so the rejection stays inspectable.

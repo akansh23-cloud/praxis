@@ -61,9 +61,17 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Keep, "keep", false,
 		"keep the scenario namespaces and Incident after the run instead of tearing them down")
 	cmd.Flags().StringVar(&opts.Agent, "agent", runner.AgentNone,
-		`agent driven through the seam: "none" (nothing responds; the wait times out gracefully) or "rulebased" (the intentionally dumb baseline)`)
+		`agent driven through the seam: "none" (nothing responds; the wait times out gracefully), "rulebased" (the intentionally dumb baseline) or "llm" (the model-backed agent; needs ANTHROPIC_API_KEY for provider anthropic)`)
 	cmd.Flags().StringVar(&opts.ResultsDir, "results-dir", "",
 		"directory for this invocation's scored JSONL run records (default bench/results/)")
+	cmd.Flags().StringVar(&opts.PrometheusURL, "prometheus-url", "",
+		"Prometheus base URL for the evidence collector's Metric items (e.g. a port-forward of svc/prometheus-server in monitoring); empty omits them")
+	cmd.Flags().StringVar(&opts.LokiURL, "loki-url", "",
+		"Loki base URL for the evidence collector's LogTemplate items (e.g. a port-forward of svc/loki in monitoring); empty omits them")
+	cmd.Flags().StringVar(&opts.LLMProvider, "llm-provider", "anthropic", `LLM provider for --agent llm: "anthropic" or "ollama"`)
+	cmd.Flags().StringVar(&opts.LLMModel, "llm-model", "", "LLM model id for --agent llm (default claude-opus-5 for anthropic; required for ollama)")
+	cmd.Flags().StringVar(&opts.LLMBaseURL, "llm-base-url", "", "LLM endpoint override (a proxy, or a local Ollama on a non-default port)")
+	cmd.Flags().StringVar(&opts.LLMEffort, "llm-effort", "", "Anthropic output effort for --agent llm: low, medium, high, xhigh or max (default: the provider's)")
 	_ = cmd.MarkFlagRequired("scenario")
 	return cmd
 }
