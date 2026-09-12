@@ -35,6 +35,15 @@ const (
 	hugeItemKey   = "shop/huge"
 	keyNamespace  = "namespace"
 	goldenNS      = "shop"
+	goldenPodKey  = goldenNS + "/" + goldenPod
+	goldenDeploy  = "checkout-api"
+	goldenCause   = "commit 4be1f2a: trim session-cache memory to cut per-pod cost"
+	goldenCommit  = "4be1f2a9c31d"
+	reasonBackOff = "BackOff"
+	kindPodTest   = "Pod"
+	goldenRS      = "checkout-api-7d9c6f5b4"
+	otherNS       = "other"
+	valFalse      = "false"
 )
 
 func testIncidentRef() IncidentRef {
@@ -51,20 +60,20 @@ func goldenCollected() []Collected {
 			"promql": `sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~"^(?:shop)$",container!=""})`,
 			"series": `{namespace="shop",pod="checkout-api-7d9c6f5b4-x2m8q"} 41943040`,
 		}},
-		{Type: ItemTypePodStatus, Source: SourceK8s, Key: "shop/checkout-api-7d9c6f5b4-x2m8q", Data: map[string]string{
+		{Type: ItemTypePodStatus, Source: SourceK8s, Key: goldenPodKey, Data: map[string]string{
 			keyNamespace: goldenNS, "name": goldenPod, "phase": "Running",
-			"ready": "false", "container.session-cache.lastTerminated": "OOMKilled:exit=137",
+			"ready": valFalse, "container.session-cache.lastTerminated": "OOMKilled:exit=137",
 			"container.session-cache.restartCount": "4", "container.session-cache.state": "waiting:CrashLoopBackOff",
 		}},
 		{Type: ItemTypeGitCommit, Source: SourceK8s, Key: "shop/Deployment/checkout-api", Data: map[string]string{
-			"workloadKind": "Deployment", "workloadName": "checkout-api", keyNamespace: goldenNS,
-			"changeCause": "commit 4be1f2a: trim session-cache memory to cut per-pod cost",
-			"commit":      "4be1f2a9c31d",
+			"workloadKind": kindDeployment, "workloadName": goldenDeploy, keyNamespace: goldenNS,
+			"changeCause": goldenCause,
+			"commit":      goldenCommit,
 		}},
 		{Type: ItemTypeEvent, Source: SourceK8s, Key: "shop/Pod/checkout-api-7d9c6f5b4-x2m8q/BackOff", Data: map[string]string{
-			EventDataType: "Warning", EventDataReason: "BackOff",
+			EventDataType: "Warning", EventDataReason: reasonBackOff,
 			EventDataMessage:      "Back-off restarting failed container session-cache in pod checkout-api-7d9c6f5b4-x2m8q",
-			EventDataInvolvedKind: "Pod", EventDataInvolvedName: goldenPod,
+			EventDataInvolvedKind: kindPodTest, EventDataInvolvedName: goldenPod,
 			EventDataInvolvedNamespace: goldenNS, EventDataCount: "6",
 		}},
 		{Type: ItemTypeMetric, Source: SourcePrometheus, Key: tmplSLOBurn, Data: map[string]string{
@@ -72,15 +81,15 @@ func goldenCollected() []Collected {
 			"promql": `max by (namespace) (slo:error_budget_burn_rate{namespace=~"^(?:shop)$"})`,
 			"error":  "query prometheus: connection refused",
 		}},
-		{Type: ItemTypeOwnerChain, Source: SourceK8s, Key: "shop/checkout-api-7d9c6f5b4-x2m8q", Data: map[string]string{
+		{Type: ItemTypeOwnerChain, Source: SourceK8s, Key: goldenPodKey, Data: map[string]string{
 			keyNamespace: goldenNS, "pod": goldenPod,
 			"chain":        "Pod/checkout-api-7d9c6f5b4-x2m8q -> ReplicaSet/checkout-api-7d9c6f5b4 -> Deployment/checkout-api",
-			"workloadKind": "Deployment", "workloadName": "checkout-api",
+			"workloadKind": kindDeployment, "workloadName": goldenDeploy,
 		}},
 		{Type: ItemTypeEvent, Source: SourceK8s, Key: "shop/Pod/checkout-api-7d9c6f5b4-x2m8q/Unhealthy", Data: map[string]string{
 			EventDataType: "Warning", EventDataReason: "Unhealthy",
 			EventDataMessage:      "Readiness probe failed: Get \"http://10.244.0.12:8080/ready\": dial tcp: connect: connection refused",
-			EventDataInvolvedKind: "Pod", EventDataInvolvedName: goldenPod,
+			EventDataInvolvedKind: kindPodTest, EventDataInvolvedName: goldenPod,
 			EventDataInvolvedNamespace: goldenNS, EventDataCount: "2",
 		}},
 	}
