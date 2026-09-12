@@ -60,13 +60,14 @@ type Collected struct {
 	Data   map[string]string
 }
 
-// retentionRank orders types for truncation. LLD §6 names the priority
-// "Metric > PodStatus > Event > LogTemplate > OwnerChain" — truncate
-// lowest first, so OwnerChain items are the first to go and Metric the
-// last of the listed five. GitCommit and SyncState are absent from the
-// LLD's list; they are the smallest and rarest items and the recent-change
-// context they carry is exactly what several diagnosis answer keys hinge
-// on, so they rank above the listed types and are truncated last.
+// retentionRank is the complete normative retention order of LLD §6 /
+// ADR-006: truncation always drops from the lowest rank present, so
+// OwnerChain is sacrificed first and GitCommit survives cap pressure
+// longest — when the bundle must forget something, it forgets volume
+// before it forgets causes. These ranks decide which items survive the
+// caps and therefore the canonical bytes and hash of any over-cap
+// bundle; changing them is a versioned contract change (ADR-006), never
+// a quiet edit.
 var retentionRank = map[ItemType]int{
 	ItemTypeGitCommit:   7,
 	ItemTypeSyncState:   6,

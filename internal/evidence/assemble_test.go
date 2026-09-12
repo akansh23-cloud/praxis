@@ -269,6 +269,39 @@ func TestAssembleCaps(t *testing.T) {
 				ItemTypeSyncState: 1,
 			},
 		},
+		{
+			// ALL SEVEN types under pressure: 63 GitCommit + one of each
+			// other type = 69 items, five over cap. The five drops must
+			// consume, in ADR-006 ladder order, OwnerChain → LogTemplate
+			// → Event → PodStatus → Metric — leaving exactly the top two
+			// ranks standing. Any deviation from the normative order
+			// changes this survivor set.
+			name: "complete seven-type ladder, truncated bottom-up",
+			in: slices.Concat(
+				filler(ItemTypeGitCommit, SourceK8s, 63, 16),
+				filler(ItemTypeSyncState, SourceArgoCD, 1, 16),
+				filler(ItemTypeMetric, SourcePrometheus, 1, 16),
+				filler(ItemTypePodStatus, SourceK8s, 1, 16),
+				filler(ItemTypeEvent, SourceK8s, 1, 16),
+				filler(ItemTypeLogTemplate, SourceLoki, 1, 16),
+				filler(ItemTypeOwnerChain, SourceK8s, 1, 16),
+			),
+			wantCount: map[ItemType]int{
+				ItemTypeGitCommit: 63,
+				ItemTypeSyncState: 1,
+			},
+		},
+		{
+			// The top of the ladder: with only the two highest ranks
+			// present, SyncState is the lowest rank in the bundle and is
+			// dropped before any GitCommit.
+			name: "gitcommit outranks syncstate",
+			in: slices.Concat(
+				filler(ItemTypeGitCommit, SourceK8s, 64, 16),
+				filler(ItemTypeSyncState, SourceArgoCD, 1, 16),
+			),
+			wantCount: map[ItemType]int{ItemTypeGitCommit: 64},
+		},
 	}
 
 	for _, tc := range cases {
