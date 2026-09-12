@@ -38,6 +38,7 @@ import (
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/controller"
 	"github.com/akansh23-cloud/praxis/internal/evidence"
+	"github.com/akansh23-cloud/praxis/internal/evidence/logs"
 	"github.com/akansh23-cloud/praxis/internal/validate"
 	// +kubebuilder:scaffold:imports
 )
@@ -64,6 +65,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var prometheusURL string
+	var lokiURL string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -86,6 +88,11 @@ func main() {
 		"Base URL of the Prometheus instance the evidence collector queries for Metric items "+
 			"(e.g. http://prometheus.monitoring:9090). Empty disables metric collection; "+
 			"the bundle then honestly carries no Metric evidence.")
+	flag.StringVar(&lokiURL, "loki-url", "",
+		"Base URL of the Loki instance the evidence collector queries for LogTemplate items "+
+			"(e.g. http://loki.monitoring:3100). Empty disables log collection; "+
+			"the bundle then honestly carries no LogTemplate evidence. Only templates, "+
+			"counts and one scrubbed exemplar per template ever enter a bundle.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -188,7 +195,8 @@ func main() {
 	// The evidence path sees the cluster only through the secretless
 	// evidence.Reader over the uncached API reader: one-shot collections
 	// need no informers, and the narrow interface is the type-level half
-	// of the no-secrets invariant.
+	// of the no-secrets invariant. Telemetry endpoints are process
+	// configuration — flags — never something fetched from the cluster.
 	var promClient evidence.QueryClient
 	if prometheusURL != "" {
 		qc, err := evidence.NewHTTPQueryClient(prometheusURL)
@@ -198,6 +206,15 @@ func main() {
 		}
 		promClient = qc
 	}
+	var logClient logs.Client
+	if lokiURL != "" {
+		lc, err := logs.NewHTTPClient(lokiURL)
+		if err != nil {
+			setupLog.Error(err, "Failed to parse --loki-url")
+			os.Exit(1)
+		}
+		logClient = lc
+	}
 	if err := (&controller.IncidentReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
@@ -205,6 +222,7 @@ func main() {
 		Collector: &evidence.Collector{
 			Reader: evidence.NewReader(mgr.GetAPIReader()),
 			Prom:   promClient,
+			Logs:   logClient,
 		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "incident")

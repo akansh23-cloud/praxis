@@ -7,8 +7,10 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,6 +27,7 @@ import (
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/evidence"
+	"github.com/akansh23-cloud/praxis/internal/evidence/logs"
 	"github.com/akansh23-cloud/praxis/internal/hash"
 )
 
@@ -38,6 +41,8 @@ import (
 const (
 	evDeployName = "checkout-api"
 	evPauseImage = "registry.k8s.io/pause:3.10"
+	evPodName    = "checkout-api-7d9c6f5b4-x2m8q"
+	evAppLabel   = "app"
 )
 
 // failingReader satisfies evidence.Reader and fails every read: the
@@ -69,6 +74,37 @@ func (failingReader) ListStatefulSets(context.Context, string) ([]appsv1.Statefu
 
 func (failingReader) ListDaemonSets(context.Context, string) ([]appsv1.DaemonSet, error) {
 	return nil, errReaderDown
+}
+
+// Planted credentials for the Session 3.2 envtest matrix — obviously
+// fake, regex-valid, the same shapes internal/evidence/redact_test.go
+// uses. Assertions below name them by key and never print a value.
+var plantedCreds = map[string]string{
+	"aws-access-key": "AKIAIOSFODNN7EXAMPLE",
+	"aws-secret-key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+	"url-password":   "hunter2-fake-pass",
+	"pem-body":       "MIIEfakefakefakeFAKE0123456789fakefakefakeFAKEfakefakefakeFAKE1234",
+	"env-value":      "literal-env-value-FAKE-9f8e7d",
+	"jwt": base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"praxis-envtest"}`)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte("fake-signature-FAKE")),
+}
+
+// fakeLogClient stands in for Loki in envtest (which has no kubelet and
+// therefore no pod logs): it serves planted lines for whatever query it
+// receives and records the queries so the spec can prove the collector
+// asked for exactly the scope namespace and nothing else.
+type fakeLogClient struct {
+	lines   []string
+	queries []string
+}
+
+func (f *fakeLogClient) QueryRange(_ context.Context, logql string, _, _ time.Time, _ int) ([]logs.Stream, error) {
+	f.queries = append(f.queries, logql)
+	return []logs.Stream{{
+		Labels: map[string]string{"container": fixtureContainerName, "pod": evPodName},
+		Lines:  f.lines,
+	}}, nil
 }
 
 var _ = Describe("Incident evidence machine", func() {
@@ -141,9 +177,9 @@ var _ = Describe("Incident evidence machine", func() {
 				},
 			},
 			Spec: appsv1.DeploymentSpec{
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": evDeployName}},
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{evAppLabel: evDeployName}},
 				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": evDeployName}},
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{evAppLabel: evDeployName}},
 					Spec: corev1.PodSpec{Containers: []corev1.Container{{
 						Name: fixtureContainerName, Image: evPauseImage,
 					}}},
@@ -163,7 +199,7 @@ var _ = Describe("Incident evidence machine", func() {
 		Expect(k8sClient.Create(ctx, rs)).To(Succeed())
 
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "checkout-api-7d9c6f5b4-x2m8q", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: evPodName, Namespace: ns},
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{
 				Name: fixtureContainerName, Image: evPauseImage,
 			}}},
@@ -239,6 +275,126 @@ var _ = Describe("Incident evidence machine", func() {
 		Expect(incident.ResourceVersion).To(Equal(incVersion))
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: incident.Namespace, Name: wantRef}, cm)).To(Succeed())
 		Expect(cm.ResourceVersion).To(Equal(cmVersion))
+	})
+
+	It("stores a bundle holding no planted credential from any channel (Session 3.2)", func() {
+		ns := scopedNamespace()
+		pem := "-----BEGIN RSA PRIVATE KEY-----\n" + plantedCreds["pem-body"] + "\n-----END RSA PRIVATE KEY-----"
+		credURL := "postgres://shopadmin:" + plantedCreds["url-password"] + "@db.shop.svc:5432/orders"
+
+		// Channel 1: object metadata — the change-cause annotation carries
+		// a credentialed URL and an AWS key next to legitimate change context.
+		deploy := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: evDeployName, Namespace: ns,
+				Annotations: map[string]string{
+					"kubernetes.io/change-cause": "kubectl set env deploy/checkout-api DATABASE_URL=" + credURL +
+						" AWS_ACCESS_KEY_ID=" + plantedCreds["aws-access-key"] + " --record",
+					praxisv1alpha1.AnnotationCommit: "4be1f2a9c31d",
+				},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{evAppLabel: evDeployName}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{evAppLabel: evDeployName}},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: fixtureContainerName, Image: evPauseImage,
+					}}},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, deploy)).To(Succeed())
+
+		// Channel 2: pod spec — a literal env value and a Secret-backed one.
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: evPodName, Namespace: ns},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name: fixtureContainerName, Image: evPauseImage,
+				Env: []corev1.EnvVar{
+					{Name: "DB_PASSWORD", Value: plantedCreds["env-value"]},
+					{Name: "AWS_SECRET_ACCESS_KEY", ValueFrom: &corev1.EnvVarSource{
+						SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "aws-creds-object"}, Key: "secret",
+						}}},
+				},
+			}}},
+		}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		// Channel 3: pod status — a kubelet message quoting the container's last words.
+		pod.Status = corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: fixtureContainerName, Image: evPauseImage, RestartCount: 2,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "CrashLoopBackOff",
+					Message: "back-off 40s restarting failed container; last log: key " + plantedCreds["aws-secret-key"],
+				}},
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+		// Channel 4: an Event whose message quotes a probe's own output.
+		Expect(k8sClient.Create(ctx, &corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "unhealthy-ev", Namespace: ns},
+			Type:       corev1.EventTypeWarning, Reason: "Unhealthy",
+			Message: "Liveness probe failed: curl -H 'Authorization: Bearer " + plantedCreds["jwt"] +
+				"' returned 401; client cert: " + pem,
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod.Name, Namespace: ns},
+		})).To(Succeed())
+
+		// Channel 5: pod logs, via the Loki seam.
+		logClient := &fakeLogClient{}
+		for i := range 3 {
+			logClient.lines = append(logClient.lines,
+				"Authorization: Bearer "+plantedCreds["jwt"]+" rejected",
+				fmt.Sprintf("using aws key %s for request %d", plantedCreds["aws-access-key"], i),
+				"DATABASE_URL="+credURL,
+				"export AWS_SECRET_ACCESS_KEY="+plantedCreds["aws-secret-key"],
+			)
+		}
+		logClient.lines = append(logClient.lines,
+			"-----BEGIN RSA PRIVATE KEY-----", plantedCreds["pem-body"], "-----END RSA PRIVATE KEY-----")
+
+		reconciler := newReconciler(k8sClient)
+		reconciler.Collector = &evidence.Collector{Reader: evidence.NewReader(k8sClient), Logs: logClient}
+
+		incident := newScopedIncident(ns)
+		Expect(k8sClient.Create(ctx, incident)).To(Succeed())
+		mustReconcile(reconciler, incident) // → Collecting
+		mustReconcile(reconciler, incident) // → Analyzed
+		Expect(incident.Status.Phase).To(Equal(praxisv1alpha1.IncidentPhaseAnalyzed))
+
+		By("the collector asked Loki for exactly the scope namespace")
+		Expect(logClient.queries).To(Equal([]string{`{namespace="` + ns + `"}`}))
+
+		By("the stored ConfigMap bytes hold no planted credential, anywhere")
+		cm := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: incident.Namespace, Name: incident.Status.EvidenceBundleRef}, cm)).To(Succeed())
+		raw := cm.Data[evidence.BundleConfigMapKey]
+		holds := func(needle string) bool { return strings.Contains(raw, needle) }
+		for name, secret := range plantedCreds {
+			Expect(holds(secret)).To(BeFalse(), "planted %s survives in the stored bundle", name)
+		}
+		Expect(holds("aws-creds-object")).To(BeFalse(), "the referenced Secret's name leaked")
+		Expect(holds("shopadmin:")).To(BeFalse(), "the URL user name survived")
+
+		By("markers, flags, env names and legitimate context are all present")
+		for _, marker := range []string{
+			"«redacted:url-credentials»", "«redacted:aws-access-key»", "«redacted:jwt»",
+			"«redacted:pem-block»", "«redacted:opaque-token»",
+		} {
+			Expect(holds(marker)).To(BeTrue(), "marker %s missing", marker)
+		}
+		Expect(holds(`"redacted":true`)).To(BeTrue())
+		Expect(holds(`"container.api.env":"DB_PASSWORD,AWS_SECRET_ACCESS_KEY(secretKeyRef)"`)).To(BeTrue(), "env names must survive as names only")
+		Expect(holds(`"commit":"4be1f2a9c31d"`)).To(BeTrue(), "the commit sha next to a scrubbed annotation must survive")
+		Expect(holds(`"ev/logtemplate-01"`)).To(BeTrue(), "log templates must be present")
+
+		By("the status hash is the hash of exactly the stored, scrubbed bytes")
+		Expect(hash.SHA256Prefixed([]byte(raw))).To(Equal(incident.Status.EvidenceBundleHash))
+		cond := evidenceCondition(incident)
+		Expect(cond.Message).To(ContainSubstring("loki: "))
+		Expect(cond.Message).To(ContainSubstring("redacted"))
 	})
 
 	It("honours a presupplied hash without collecting, visibly", func() {
