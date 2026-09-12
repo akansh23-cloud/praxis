@@ -115,7 +115,9 @@ type Action struct {
 	PatchResourceLimits *PatchResourceLimitsParams `json:"patchResourceLimits,omitempty"`
 }
 
-// EvidenceID references one item in an evidence bundle, e.g. "ev/pod-status-04".
+// EvidenceID references one item in an evidence bundle, e.g. "ev/podstatus-04".
+// The token before the sequence number comes from the closed ADR-005 source
+// vocabulary (the LLD §6 evidence types, lowercased).
 // +kubebuilder:validation:Pattern=`^ev/[a-z0-9][a-z0-9-]*$`
 // +kubebuilder:validation:MaxLength=128
 type EvidenceID string

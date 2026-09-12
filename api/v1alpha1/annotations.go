@@ -34,3 +34,16 @@ const (
 	// benchmark only ever reads it.
 	AnnotationNoActionProposed = "praxis.dev/no-action-proposed"
 )
+
+// Recent-change context (LLD §6 GitCommit evidence). Until the real Git
+// integration lands in Phase 6, the deployed-change trail lives in workload
+// annotations stamped by whatever applied the change — the bench fault packs
+// already do, and so does any pipeline that runs `kubectl apply` with a
+// change-cause. The evidence collector only ever READS these; when they are
+// absent there simply is no GitCommit evidence — history is never invented.
+const (
+	// AnnotationCommit carries the VCS revision behind the workload's
+	// current spec. Read together with the upstream convention
+	// kubernetes.io/change-cause into GitCommit evidence items.
+	AnnotationCommit = "praxis.dev/commit"
+)
