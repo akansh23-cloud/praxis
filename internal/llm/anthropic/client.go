@@ -55,10 +55,24 @@ const DefaultMaxTokens = 16000
 // DefaultTimeout bounds one request.
 const DefaultTimeout = 5 * time.Minute
 
+// PricingSource names where defaultPricing was read from and when, so a
+// published USD figure can cite its basis. The table was taken from the
+// 2026-06-24 snapshot of the Claude API reference and re-verified against
+// the live pricing page on 2026-09-12 (playbook Session 3.4): identical
+// for every listed model. Re-verify before publishing numbers for a
+// model; update the table and this text together.
+const PricingSource = "Claude API pricing page (platform.claude.com/docs/en/about-claude/pricing), first-party list prices; snapshot 2026-06-24, re-verified live 2026-09-12"
+
 // defaultPricing is the first-party list price table (USD per million
-// tokens) as published in the Claude API reference cached 2026-06-24.
-// Prices change; llm.Config.Pricing overrides this table, and a model
-// absent from it is accounted as "cost unknown", never as free.
+// tokens) for uncached input and output, as published in the Claude API
+// reference (see PricingSource for the snapshot and verification dates).
+// Prices change;
+// llm.Config.Pricing overrides this table, and a model absent from it is
+// accounted as "cost unknown", never as free. The table prices exactly the
+// two token classes a Praxis request consumes: no request here sets
+// cache_control, so cache reads and writes — billed at their own rates —
+// should never appear; if a response reports them anyway, the call is
+// accounted as cost unknown rather than priced at the wrong rate.
 var defaultPricing = map[string]llm.Pricing{
 	DefaultModel:        {InputUSDPerMTok: 5, OutputUSDPerMTok: 25},
 	"claude-opus-4-8":   {InputUSDPerMTok: 5, OutputUSDPerMTok: 25},
@@ -166,6 +180,11 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, js
 		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 	}
 	usage.CostUSD, usage.CostKnown = c.pricing.Cost(usage.InputTokens, usage.OutputTokens)
+	if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+		// Token classes the table does not price: honest "unknown" beats a
+		// number computed at the wrong rate.
+		usage.CostKnown = false
+	}
 
 	switch resp.StopReason {
 	case sdk.StopReasonRefusal:

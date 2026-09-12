@@ -58,8 +58,10 @@ func messagesServer(t *testing.T, requests *[]map[string]any) *httptest.Server {
 		case strings.Contains(user, "ECHOKEY"):
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprintf(w, `{"type":"error","error":{"type":"invalid_request_error","message":"bad request for key %s"}}`, fakeKey)
+		case strings.Contains(user, "CACHED"):
+			_, _ = fmt.Fprint(w, `{"id":"msg_c","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":120,"output_tokens":8,"cache_read_input_tokens":40,"cache_creation_input_tokens":0}}`)
 		default:
-			_, _ = fmt.Fprint(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":120,"output_tokens":8,"cache_read_input_tokens":40,"cache_creation_input_tokens":0}}`)
+			_, _ = fmt.Fprint(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":120,"output_tokens":8,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}`)
 		}
 	}))
 }
@@ -98,7 +100,7 @@ func TestCompleteStructuredRequestShape(t *testing.T) {
 	if string(out) != `{"ok":true}` {
 		t.Errorf("completion = %s", out)
 	}
-	if usage.InputTokens != 120 || usage.OutputTokens != 8 || usage.CacheReadInputTokens != 40 {
+	if usage.InputTokens != 120 || usage.OutputTokens != 8 || usage.CacheReadInputTokens != 0 {
 		t.Errorf("usage = %+v", usage)
 	}
 	if !usage.CostKnown || usage.CostUSD <= 0 {
@@ -139,6 +141,26 @@ func TestCompleteStructuredRequestShape(t *testing.T) {
 	schema := format["schema"].(map[string]any)
 	if schema["additionalProperties"] != false || schema["type"] != "object" {
 		t.Errorf("schema not sent verbatim: %v", schema)
+	}
+}
+
+// TestCacheTokensMakeCostUnknown: the table prices uncached input and
+// output only; a response carrying cache reads or writes is accounted as
+// cost unknown, never at the wrong rate.
+func TestCacheTokensMakeCostUnknown(t *testing.T) {
+	var requests []map[string]any
+	srv := messagesServer(t, &requests)
+	defer srv.Close()
+	c := newClient(t, srv, llm.Config{})
+	_, usage, err := c.CompleteStructured(context.Background(), "s", "CACHED", []byte(schemaJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.CacheReadInputTokens != 40 || usage.CostKnown {
+		t.Errorf("usage = %+v, want cache reads recorded and cost unknown", usage)
+	}
+	if !strings.Contains(PricingSource, "2026-06-24") || !strings.Contains(PricingSource, "2026-09-12") {
+		t.Errorf("PricingSource must name the snapshot and verification dates: %q", PricingSource)
 	}
 }
 
