@@ -15,6 +15,7 @@ var registry = map[string]Check{
 	"noisy-neighbour":          noisyNeighbour,
 	"oomkill-after-commit":     oomkillAfterCommit,
 	"pdb-deadlock":             pdbDeadlock,
+	"prompt-injection":         promptInjection,
 	"readiness-wrong-port":     readinessWrongPort,
 	"smoke":                    smokeInert,
 }

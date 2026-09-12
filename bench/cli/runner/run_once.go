@@ -108,13 +108,26 @@ func (r *Runner) runOnce(ctx context.Context, n int) (outcome, error) {
 			return fmt.Errorf("scenario %q has no fault-manifested check registered — every pack must prove its fault without an agent; add one in bench/cli/faultcheck", r.scn.Name)
 		}
 		return check(ctx, faultcheck.Env{
-			Client:     r.c,
-			Tools:      r.tc,
-			Namespaces: r.scn.Incident.ScopeNamespaces,
-			Logf:       r.out.f,
+			Client:           r.c,
+			Tools:            r.tc,
+			Namespaces:       r.scn.Incident.ScopeNamespaces,
+			Logf:             r.out.f,
+			PlantedTelemetry: r.scn.GroundTruth.PlantedTelemetry,
 		})
 	}); err != nil {
 		return oc, err
+	}
+
+	// A planting pack (ADR-010) files its Incident only once Loki serves
+	// every planted line, so the collector's window cannot miss them by a
+	// race: a false visibility is then a finding.
+	if plants := r.scn.GroundTruth.PlantedTelemetry; len(plants) > 0 {
+		if err := r.phase(ctx, label+"telemetry-settled", func(ctx context.Context) error {
+			awaitPlantsAtLoki(ctx, r.collector.Logs, r.scn.Incident.ScopeNamespaces, plants, plantsSettleTimeout, r.out.f)
+			return nil
+		}); err != nil {
+			return oc, err
+		}
 	}
 
 	var inc *praxisv1alpha1.Incident
@@ -411,6 +424,10 @@ func (r *Runner) recordRun(n int, filedAt time.Time, inc *praxisv1alpha1.Inciden
 			}
 		}
 		rec.PlanAnnotations = report.PlanAnnotations
+		if plants := r.scn.GroundTruth.PlantedTelemetry; len(plants) > 0 && report.Bundle != nil {
+			rec.PlantsObserved = observePlants(report.Bundle, plants)
+			r.out.f("    planted telemetry: %s", describePlants(rec.PlantsObserved))
+		}
 		if resp.Kind == scoring.ResponsePlanInvalid {
 			// The rejected spec never reached the cluster; record what the
 			// agent proposed so the rejection stays inspectable.
@@ -425,9 +442,22 @@ func (r *Runner) recordRun(n int, filedAt time.Time, inc *praxisv1alpha1.Inciden
 	score := scoring.Compute(&rec, &r.scn.GroundTruth)
 	rec.Score = &score
 	r.records = append(r.records, rec)
-	r.out.f("    scored: top1=%v top3=%v restraint=%v forbidden=%d",
-		score.DiagnosisTop1, score.DiagnosisTop3, score.RestraintCorrect, score.ForbiddenViolations)
+	r.out.f("    scored: top1=%v top3=%v restraint=%v forbidden=%d%s",
+		score.DiagnosisTop1, score.DiagnosisTop3, score.RestraintCorrect, score.ForbiddenViolations,
+		describeInjection(&score))
 	return scoring.AppendRecord(r.resultsFile, &rec)
+}
+
+// describeInjection renders the ADR-010 metrics when they apply.
+func describeInjection(score *scoring.Score) string {
+	if score.InjectionVisible == nil {
+		return ""
+	}
+	out := fmt.Sprintf(" injection-visible=%v", *score.InjectionVisible)
+	if score.InjectionInert != nil {
+		out += fmt.Sprintf(" injection-inert=%v", *score.InjectionInert)
+	}
+	return out
 }
 
 // assertScenarioBlind fails the run if the exact serialized inputs the

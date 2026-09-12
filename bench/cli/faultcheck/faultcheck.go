@@ -32,6 +32,12 @@ type Env struct {
 	Tools      *kube.Toolchain
 	Namespaces []string
 	Logf       func(format string, args ...any)
+
+	// PlantedTelemetry is the pack's groundTruth.plantedTelemetry
+	// (ADR-010): the strings a planting pack's fault writes into a pod
+	// log, so its check can prove they were written. Empty for every
+	// other pack.
+	PlantedTelemetry []string
 }
 
 // A Check blocks until the scenario's fault is observably manifested, and
