@@ -1,0 +1,326 @@
+{
+  "description": "RemediationPlanSpec is immutable after creation (transition rule below):\napprovals are cryptographically bound to a hash of the exact plan, so an\nedited plan is by definition a different plan. A change of mind means a\nnew object.",
+  "type": "object",
+  "required": [
+    "actions",
+    "evidenceBundleHash",
+    "hypothesis",
+    "incidentRef",
+    "rollback",
+    "verification"
+  ],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "maxItems": 5,
+      "minItems": 1,
+      "items": {
+        "description": "Action is a discriminated union: exactly the parameter block matching Type\nmust be set. The CEL rules below make the API server enforce this, so a\nmalformed plan is impossible to persist, not merely flagged.",
+        "type": "object",
+        "required": [
+          "target",
+          "type"
+        ],
+        "properties": {
+          "patchResourceLimits": {
+            "description": "PatchResourceLimitsParams adjusts container resources.",
+            "type": "object",
+            "required": [
+              "container"
+            ],
+            "properties": {
+              "container": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cpu": {
+                "description": "QuantityChange records both sides of a resource change so the diff is\nreviewable from the plan alone and drift is detectable at execution time.",
+                "type": "object",
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "from": {
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "to": {
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "memory": {
+                "description": "QuantityChange records both sides of a resource change so the diff is\nreviewable from the plan alone and drift is detectable at execution time.",
+                "type": "object",
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "from": {
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "to": {
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              }
+            },
+            "x-kubernetes-validations": [
+              {
+                "rule": "has(self.memory) || has(self.cpu)",
+                "message": "at least one of memory or cpu must be set"
+              }
+            ]
+          },
+          "rollbackRelease": {
+            "description": "RollbackReleaseParams selects the revision to return to.",
+            "type": "object",
+            "properties": {
+              "toRevision": {
+                "description": "ToRevision pins the exact revision. When omitted, the executor\ntargets the previous revision and records which one it chose.",
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              }
+            }
+          },
+          "scaleWorkload": {
+            "description": "ScaleWorkloadParams bounds a replica change in both directions.",
+            "type": "object",
+            "required": [
+              "fromReplicas",
+              "toReplicas"
+            ],
+            "properties": {
+              "fromReplicas": {
+                "description": "FromReplicas is the replica count observed when the plan was created.\nThe executor refuses to act if the live value has drifted — optimistic\nconcurrency at the semantic level, not just resourceVersion.",
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "toReplicas": {
+                "description": "ToReplicas is the desired count. This schema ceiling is the hard\nstructural bound; the risk scorer and policy gate impose the real,\nper-namespace limits on top of it.",
+                "type": "integer",
+                "format": "int32",
+                "maximum": 100,
+                "minimum": 0
+              }
+            }
+          },
+          "target": {
+            "description": "TargetRef identifies exactly one object an action operates on. Wildcards\nand label selectors are deliberately unsupported: a plan that cannot\nenumerate its targets cannot have its blast radius computed.",
+            "type": "object",
+            "required": [
+              "kind",
+              "name"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Deployment",
+                  "StatefulSet",
+                  "DaemonSet",
+                  "Node"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 253,
+                "minLength": 1
+              },
+              "namespace": {
+                "description": "Namespace of the target. Required for namespaced kinds; must be\nomitted for Node (enforced by CEL on Action).",
+                "type": "string",
+                "maxLength": 63
+              }
+            }
+          },
+          "type": {
+            "description": "ActionType is the closed action vocabulary. This enum is the single most\nimportant line in the security architecture: anything the planner emits\noutside this list is rejected by the API server's schema validation before\nit exists as an object. Prompt injection cannot invent a verb.\n\nADR-001: extend this vocabulary only when a benchmark scenario demands it.",
+            "type": "string",
+            "enum": [
+              "RestartWorkload",
+              "ScaleWorkload",
+              "RollbackRelease",
+              "PatchResourceLimits",
+              "CordonNode"
+            ]
+          }
+        },
+        "x-kubernetes-validations": [
+          {
+            "rule": "(self.type == 'ScaleWorkload') == has(self.scaleWorkload)",
+            "message": "scaleWorkload params must be set iff type is ScaleWorkload"
+          },
+          {
+            "rule": "(self.type == 'PatchResourceLimits') == has(self.patchResourceLimits)",
+            "message": "patchResourceLimits params must be set iff type is PatchResourceLimits"
+          },
+          {
+            "rule": "self.type == 'RollbackRelease' || !has(self.rollbackRelease)",
+            "message": "rollbackRelease params are only valid for type RollbackRelease"
+          },
+          {
+            "rule": "self.type == 'CordonNode' ? self.target.kind == 'Node' : self.target.kind != 'Node'",
+            "message": "CordonNode must target a Node; no other action may"
+          },
+          {
+            "rule": "self.target.kind == 'Node' ? !has(self.target.namespace) : has(self.target.namespace)",
+            "message": "namespace is required for namespaced kinds and forbidden for Node"
+          }
+        ]
+      }
+    },
+    "evidenceBundleHash": {
+      "description": "EvidenceBundleHash binds this plan to the exact evidence it was\nderived from.",
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "hypothesis": {
+      "description": "Hypothesis is the analyzer's ranked explanation. Every claim must be\ntraceable to an evidence ID; the citation validator (controller-side,\nPhase 3) rejects plans whose citations don't resolve against the bundle\nnamed by spec.evidenceBundleHash. That is the structural hallucination\nguard — a hard check, not a prompt instruction.",
+      "type": "object",
+      "required": [
+        "citations",
+        "confidencePercent",
+        "summary"
+      ],
+      "properties": {
+        "citations": {
+          "type": "array",
+          "maxItems": 64,
+          "minItems": 1,
+          "items": {
+            "description": "EvidenceID references one item in an evidence bundle, e.g. \"ev/podstatus-04\".\nThe token before the sequence number comes from the closed ADR-005 source\nvocabulary (the LLD §6 evidence types, lowercased).",
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^ev/[a-z0-9][a-z0-9-]*$"
+          },
+          "x-kubernetes-list-type": "set"
+        },
+        "confidencePercent": {
+          "description": "ConfidencePercent in [0,100]. An integer percentage rather than a\nfloat: Kubernetes API conventions forbid floating point in APIs\n(serialization ambiguity across clients), and nothing downstream\nneeds sub-percent precision. (ADR-003)",
+          "type": "integer",
+          "format": "int32",
+          "maximum": 100,
+          "minimum": 0
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        }
+      }
+    },
+    "incidentRef": {
+      "description": "IncidentRef binds a plan to the incident it remediates.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uid": {
+          "description": "UID pins the plan to a specific incarnation of the incident so a\nrecreated incident with the same name cannot inherit stale plans.",
+          "type": "string"
+        }
+      }
+    },
+    "rollback": {
+      "description": "RollbackSpec declares intent only. The snapshot that makes rollback\npossible is recorded by the executor in status.execution.snapshotRef —\nstatus, not spec, because spec is immutable after creation and the\nsnapshot cannot exist until execution begins. (ADR-002; deliberately\ndeparts from the research dossier's sketch, which placed snapshotRef in\nspec, for exactly this reason.)",
+      "type": "object",
+      "required": [
+        "strategy"
+      ],
+      "properties": {
+        "strategy": {
+          "description": "RollbackStrategy names how a failed plan is reversed.",
+          "type": "string",
+          "enum": [
+            "RestorePreviousSpec",
+            "None"
+          ]
+        }
+      }
+    },
+    "verification": {
+      "description": "VerificationSpec is the falsifiable success contract, declared before\nexecution. The LLM proposes it but never evaluates it — the verifier does,\nagainst Prometheus, at the deadline.\n\nADR-004: v1alpha1 accepts free-form PromQL. The roadmap replaces this with\na template library the planner selects from, so a model cannot author a\npredicate that trivially passes.",
+      "type": "object",
+      "required": [
+        "onFailure",
+        "predicate",
+        "window"
+      ],
+      "properties": {
+        "onFailure": {
+          "description": "FailureAction is what the verifier does when the predicate fails at the\ndeadline.",
+          "type": "string",
+          "enum": [
+            "Rollback",
+            "Escalate"
+          ]
+        },
+        "predicate": {
+          "description": "Predicate is a PromQL expression that must hold for the sustained\nwindow for the plan to be Verified.",
+          "type": "string",
+          "maxLength": 2048,
+          "minLength": 1
+        },
+        "window": {
+          "description": "Window the predicate must hold for, measured from execution\ncompletion.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "x-kubernetes-validations": [
+    {
+      "rule": "self == oldSelf",
+      "message": "RemediationPlan spec is immutable; create a new plan instead of editing"
+    },
+    {
+      "rule": "self.verification.onFailure != 'Rollback' || self.rollback.strategy != 'None'",
+      "message": "onFailure Rollback requires a rollback strategy"
+    }
+  ]
+}

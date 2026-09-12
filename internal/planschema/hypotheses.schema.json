@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "description": "Ranked root-cause hypotheses, most likely first. Every claim must cite evidence ids that exist in the bundle; an empty list means no explanation.",
+  "properties": {
+    "hypotheses": {
+      "items": {
+        "additionalProperties": false,
+        "description": "Hypothesis is the analyzer's ranked explanation. Every claim must be\ntraceable to an evidence ID; the citation validator (controller-side,\nPhase 3) rejects plans whose citations don't resolve against the bundle\nnamed by spec.evidenceBundleHash. That is the structural hallucination\nguard — a hard check, not a prompt instruction.",
+        "properties": {
+          "citations": {
+            "items": {
+              "description": "EvidenceID references one item in an evidence bundle, e.g. \"ev/podstatus-04\".\nThe token before the sequence number comes from the closed ADR-005 source\nvocabulary (the LLD §6 evidence types, lowercased).",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "confidencePercent": {
+            "description": "ConfidencePercent in [0,100]. An integer percentage rather than a\nfloat: Kubernetes API conventions forbid floating point in APIs\n(serialization ambiguity across clients), and nothing downstream\nneeds sub-percent precision. (ADR-003)",
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "citations",
+          "confidencePercent",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "hypotheses"
+  ],
+  "type": "object"
+}

@@ -242,8 +242,20 @@ demo-record: ## Record docs/demo/phase1.sh with asciinema into docs/demo/phase1.
 		echo "under any terminal recorder."; \
 	fi
 
+# The planner's JSON Schemas are DERIVED from the RemediationPlan CRD
+# (playbook Session 3.3, FR-P3-05): the CRD is the single source of truth,
+# hack/schema-derive is the only writer of internal/planschema/*.json, and
+# schema-check fails lint the moment the CRD changes without a re-derivation.
+.PHONY: schema-derive
+schema-derive: manifests ## Re-derive the planner JSON Schemas from the RemediationPlan CRD.
+	go run ./hack/schema-derive
+
+.PHONY: schema-check
+schema-check: ## Verify the derived planner JSON Schemas match the CRD.
+	go run ./hack/schema-derive -check
+
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint schema-check ## Run golangci-lint linter (with the LLM import-boundary rule) and the schema sync check
 	"$(GOLANGCI_LINT)" run
 
 .PHONY: lint-fix

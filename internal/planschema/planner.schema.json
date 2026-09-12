@@ -1,0 +1,219 @@
+{
+  "additionalProperties": false,
+  "description": "The planner's verdict for one incident. verdict \"plan\" requires plan; verdict \"no-action\" requires noActionReason and a null plan.",
+  "properties": {
+    "noActionReason": {
+      "description": "One sentence justifying a no-action verdict; empty for a plan.",
+      "type": "string"
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "RemediationPlanSpec is immutable after creation (transition rule below):\napprovals are cryptographically bound to a hash of the exact plan, so an\nedited plan is by definition a different plan. A change of mind means a\nnew object.",
+          "properties": {
+            "actions": {
+              "items": {
+                "additionalProperties": false,
+                "description": "Action is a discriminated union: exactly the parameter block matching Type\nmust be set. The CEL rules below make the API server enforce this, so a\nmalformed plan is impossible to persist, not merely flagged.",
+                "properties": {
+                  "patchResourceLimits": {
+                    "additionalProperties": false,
+                    "description": "PatchResourceLimitsParams adjusts container resources.",
+                    "properties": {
+                      "container": {
+                        "type": "string"
+                      },
+                      "cpu": {
+                        "additionalProperties": false,
+                        "description": "QuantityChange records both sides of a resource change so the diff is\nreviewable from the plan alone and drift is detectable at execution time.",
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "to"
+                        ],
+                        "type": "object"
+                      },
+                      "memory": {
+                        "additionalProperties": false,
+                        "description": "QuantityChange records both sides of a resource change so the diff is\nreviewable from the plan alone and drift is detectable at execution time.",
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "to"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "container"
+                    ],
+                    "type": "object"
+                  },
+                  "rollbackRelease": {
+                    "additionalProperties": false,
+                    "description": "RollbackReleaseParams selects the revision to return to.",
+                    "properties": {
+                      "toRevision": {
+                        "description": "ToRevision pins the exact revision. When omitted, the executor\ntargets the previous revision and records which one it chose.",
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "scaleWorkload": {
+                    "additionalProperties": false,
+                    "description": "ScaleWorkloadParams bounds a replica change in both directions.",
+                    "properties": {
+                      "fromReplicas": {
+                        "description": "FromReplicas is the replica count observed when the plan was created.\nThe executor refuses to act if the live value has drifted — optimistic\nconcurrency at the semantic level, not just resourceVersion.",
+                        "type": "integer"
+                      },
+                      "toReplicas": {
+                        "description": "ToReplicas is the desired count. This schema ceiling is the hard\nstructural bound; the risk scorer and policy gate impose the real,\nper-namespace limits on top of it.",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "fromReplicas",
+                      "toReplicas"
+                    ],
+                    "type": "object"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "description": "TargetRef identifies exactly one object an action operates on. Wildcards\nand label selectors are deliberately unsupported: a plan that cannot\nenumerate its targets cannot have its blast radius computed.",
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "Deployment",
+                          "StatefulSet",
+                          "DaemonSet",
+                          "Node"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "description": "Namespace of the target. Required for namespaced kinds; must be\nomitted for Node (enforced by CEL on Action).",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "type": {
+                    "description": "ActionType is the closed action vocabulary. This enum is the single most\nimportant line in the security architecture: anything the planner emits\noutside this list is rejected by the API server's schema validation before\nit exists as an object. Prompt injection cannot invent a verb.\n\nADR-001: extend this vocabulary only when a benchmark scenario demands it.",
+                    "enum": [
+                      "RestartWorkload",
+                      "ScaleWorkload",
+                      "RollbackRelease",
+                      "PatchResourceLimits",
+                      "CordonNode"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target",
+                  "type"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "rollback": {
+              "additionalProperties": false,
+              "description": "RollbackSpec declares intent only. The snapshot that makes rollback\npossible is recorded by the executor in status.execution.snapshotRef —\nstatus, not spec, because spec is immutable after creation and the\nsnapshot cannot exist until execution begins. (ADR-002; deliberately\ndeparts from the research dossier's sketch, which placed snapshotRef in\nspec, for exactly this reason.)",
+              "properties": {
+                "strategy": {
+                  "description": "RollbackStrategy names how a failed plan is reversed.",
+                  "enum": [
+                    "RestorePreviousSpec",
+                    "None"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            "verification": {
+              "additionalProperties": false,
+              "description": "VerificationSpec is the falsifiable success contract, declared before\nexecution. The LLM proposes it but never evaluates it — the verifier does,\nagainst Prometheus, at the deadline.\n\nADR-004: v1alpha1 accepts free-form PromQL. The roadmap replaces this with\na template library the planner selects from, so a model cannot author a\npredicate that trivially passes.",
+              "properties": {
+                "onFailure": {
+                  "description": "FailureAction is what the verifier does when the predicate fails at the\ndeadline.",
+                  "enum": [
+                    "Rollback",
+                    "Escalate"
+                  ],
+                  "type": "string"
+                },
+                "predicate": {
+                  "description": "Predicate is a PromQL expression that must hold for the sustained\nwindow for the plan to be Verified.",
+                  "type": "string"
+                },
+                "window": {
+                  "description": "Window the predicate must hold for, measured from execution\ncompletion.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "onFailure",
+                "predicate",
+                "window"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "actions",
+            "verification",
+            "rollback"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The proposed plan (verdict \"plan\"), or null (verdict \"no-action\")."
+    },
+    "verdict": {
+      "description": "Whether to propose a remediation plan or to explicitly propose no action.",
+      "enum": [
+        "plan",
+        "no-action"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "verdict",
+    "noActionReason",
+    "plan"
+  ],
+  "type": "object"
+}
