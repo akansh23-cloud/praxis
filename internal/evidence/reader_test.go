@@ -43,14 +43,14 @@ var readerMethods = []string{
 
 func methodNames(t reflect.Type) []string {
 	names := make([]string, 0, t.NumMethod())
-	for i := range t.NumMethod() {
-		names = append(names, t.Method(i).Name)
+	for method := range t.Methods() {
+		names = append(names, method.Name)
 	}
 	return names
 }
 
 func TestReaderMethodSetIsClosed(t *testing.T) {
-	iface := reflect.TypeOf((*Reader)(nil)).Elem()
+	iface := reflect.TypeFor[Reader]()
 	if got := methodNames(iface); !reflect.DeepEqual(got, readerMethods) {
 		t.Errorf("Reader interface method set drifted:\n got %v\nwant %v", got, readerMethods)
 	}
@@ -65,11 +65,10 @@ func TestReaderMethodSetIsClosed(t *testing.T) {
 
 func TestReaderMentionsNoSecretAnywhere(t *testing.T) {
 	for _, typ := range []reflect.Type{
-		reflect.TypeOf((*Reader)(nil)).Elem(),
+		reflect.TypeFor[Reader](),
 		reflect.TypeOf(NewReader(nil)),
 	} {
-		for i := range typ.NumMethod() {
-			m := typ.Method(i)
+		for m := range typ.Methods() {
 			if strings.Contains(m.Name, "Secret") {
 				t.Errorf("%v exposes a secret-named method %q", typ, m.Name)
 			}

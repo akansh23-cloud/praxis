@@ -44,7 +44,7 @@ func TestRBACGrantsNoSecretAccess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
-		for _, doc := range strings.Split(string(raw), "\n---") {
+		for doc := range strings.SplitSeq(string(raw), "\n---") {
 			if strings.TrimSpace(doc) == "" {
 				continue
 			}
