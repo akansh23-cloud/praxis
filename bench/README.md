@@ -274,6 +274,31 @@ The interesting configuration is exactly what scenarios attack: readiness
 and liveness probes, and deliberately tight resource limits
 (`32Mi`/`64Mi`, `25m`/`100m` per pod).
 
+`checkout-api` additionally carries the topology's one **log-noisy
+sidecar**, `log-noise` (playbook Session 3.2 task 4): agnhost's own
+`logs-generator`, emitting a klog line per request-shaped event — every
+line differing in timestamp, counter, method, path and status — at a
+steady 2 lines/s for 100 hours, so it never exits or restarts during a
+run and never touches the restart-based predicates. It exists so the
+evidence collector's log templating (`internal/evidence/logs`,
+[ADR-007](../docs/adr/ADR-007.md)) has something real to compress: at
+Loki ingestion these are hundreds of distinct raw lines per pod; in an
+evidence bundle they must be **one** `LogTemplate` item with a count and
+a single exemplar, and no raw line may appear. No secrets, no extra
+image, `16Mi`/`48Mi` and `10m`/`50m` per sidecar. The sidecar is deployed
+by every scenario's overlay (they all include the base) and changed no
+answer key: the fault-manifested checks and the rule-based baseline's
+numbers are unaffected (re-verified mechanically in Session 3.2).
+
+The benchmark itself still gathers its stand-in bundle (warning Events
+only, `cli/agentrun/gather.go`) for the agents it drives; the real
+collector — with Prometheus and Loki — runs in the Praxis manager. To
+see a real bundle against the bench topology, run the manager on the
+host against `bench/.praxis-bench.kubeconfig` with `--prometheus-url` and
+`--loki-url` pointed at port-forwards of the `monitoring` services and
+run a scenario with `--keep`: the Incident's `status.evidenceBundleRef`
+names the ConfigMap holding it.
+
 ## Pinned versions
 
 Chart pins live in `cli/deploystack/versions.go`; shaping lives in
@@ -305,7 +330,7 @@ RAM, cold image cache for the stack):
 | Session 2.1 baseline: cold start → smoke fault injected | **3m52s** |
 | Session 2.2: cold start → oomkill fault injected (create cluster 32s, CRDs 0.7s, stack 2m41s, topology healthy 9s, fault 0.2s) | **3m23s** |
 | warm re-run of one pack end-to-end (healthy pinned releases skipped offline, 2m graceful wait included) | ~3m |
-| whole-cluster memory with stack + topology + Incident live (`docker stats` on the node container, 7.4 GiB host) — re-measured in 2.2 with the oomkill overlay's ballast containers and its fault injected: 1.887 GiB | **1.9 GiB** |
+| whole-cluster memory with stack + topology + Incident live (`docker stats` on the node container, 7.4 GiB host) — re-measured in 2.2 with the oomkill overlay's ballast containers and its fault injected: 1.887 GiB; re-measured in 3.2 with the log-noise sidecars on both checkout-api replicas and the fault injected: 1.58 GiB | **1.9 GiB** |
 
 The budget is ≤10 minutes cold to fault-ready and ≤4 GiB for one
 scenario; both hold with room to spare.

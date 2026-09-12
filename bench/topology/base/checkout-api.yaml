@@ -2,6 +2,11 @@
 # case lowers ITS memory limit; the sample Incident and RemediationPlan at
 # config/samples/ already name it). Two replicas: a rollout can be blocked
 # mid-flight, and one pod can die while the service stays up.
+#
+# It also carries the ONE log-noisy sidecar of the topology (playbook
+# Session 3.2 task 4, container log-noise below), so every scenario's
+# pods emit real, repetitive, value-changing logs that the evidence
+# collector's log templating has to earn its keep against.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,6 +59,32 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+        # log-noise — the log-noisy sidecar. agnhost's upstream
+        # logs-generator writes one klog line per request-shaped event,
+        # every line differing in timestamp, counter, method, path and
+        # status code, at a steady 2 lines/s (720000 lines over 100h —
+        # far longer than any run, so the container never exits, never
+        # restarts, never touches the restart-based predicates). At Loki
+        # ingestion these are hundreds of distinct raw lines per pod; in
+        # an evidence bundle they must collapse into ONE LogTemplate item
+        # with a count and a single exemplar (docs/adr/ADR-007.md). Same
+        # pinned image as everything else, no secrets, no probes (a
+        # sidecar without probes is Ready once running), limits sized so
+        # the laptop budget in the README still holds.
+        - name: log-noise
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["logs-generator", "--log-lines-total=720000", "--run-duration=100h"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 48Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
