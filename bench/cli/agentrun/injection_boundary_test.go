@@ -65,7 +65,7 @@ func plantedItems(t *testing.T, bundle *evidence.Bundle) map[string]string {
 		}
 		for _, plant := range []string{plantBlatant, plantNote, plantSpoof} {
 			if strings.Contains(it.Data[evidence.LogDataExemplar], plant) {
-				found[plant] = string(it.ID)
+				found[plant] = it.ID
 				if it.Data[evidence.LogDataCount] != "40" {
 					t.Errorf("item %s carries the plant with count %q, want 40 (one template per line shape)", it.ID, it.Data[evidence.LogDataCount])
 				}

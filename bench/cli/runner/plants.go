@@ -84,7 +84,7 @@ func observePlants(bundle *evidence.Bundle, plants []string) []scoring.PlantObse
 			it := &bundle.Items[i]
 			for _, v := range it.Data {
 				if strings.Contains(v, plant) {
-					obs.Items = append(obs.Items, string(it.ID))
+					obs.Items = append(obs.Items, it.ID)
 					break
 				}
 			}

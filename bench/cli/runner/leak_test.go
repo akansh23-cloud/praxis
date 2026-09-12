@@ -54,7 +54,7 @@ func realisticBundle(inc *evidence.IncidentRef) *evidence.Bundle {
 			Data: map[string]string{
 				evidence.EventDataType: "Warning", evidence.EventDataReason: reason,
 				evidence.EventDataInvolvedKind: "Pod", evidence.EventDataInvolvedName: pod,
-				evidence.EventDataInvolvedNamespace: "shop", evidence.EventDataMessage: msg,
+				evidence.EventDataInvolvedNamespace: testNamespace, evidence.EventDataMessage: msg,
 			},
 		}
 	}
