@@ -12,11 +12,11 @@ import (
 )
 
 // This file defines the evidence bundle DATA TYPES of docs/02-LLD.md §6 —
-// the parameter type the Agent seam (internal/agents, playbook Session 2.3)
-// is defined over. Only the types and their hash live here now: collection,
-// assembly, size caps, ordering, redaction and ConfigMap storage are the
-// Phase 3 collector's job (playbook Session 3.1) and are deliberately NOT
-// implemented in Phase 2.
+// the parameter type the Agent seam (internal/agents) is defined over.
+// Collection lives in k8s.go/prometheus.go, canonical assembly with the
+// §6 caps in assemble.go, and the composed entry point in collect.go
+// (playbook Session 3.1). Log templating and scrubbing arrive with
+// Session 3.2.
 
 // SchemaVersion is the bundle schema version of LLD §6.
 const SchemaVersion = "1"
@@ -63,10 +63,12 @@ type IncidentRef struct {
 	UID  string `json:"uid"`
 }
 
-// Item is one piece of evidence. In Phase 2 the data payload is a flat
-// string map — sufficient for the k8s Events the benchmark's stand-in
-// gatherer records; the Phase 3 collector owns evolving payloads into the
-// full schema-versioned §6 form.
+// Item is one piece of evidence. The data payload is a flat string map —
+// a §6-conformant JSON object whose dotted keys express nesting (e.g.
+// container.api.state) — kept flat deliberately: it keeps canonical
+// serialization and the per-item size cap trivial, and it is the exact
+// contract the Phase 2 bench and the frozen rule-based baseline already
+// read.
 type Item struct {
 	// ID is the §6 evidence id, ev/<source>-<seq>, assigned by the
 	// producer after sorting so identical state yields identical ids.

@@ -37,6 +37,7 @@ import (
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/controller"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
 	"github.com/akansh23-cloud/praxis/internal/validate"
 	// +kubebuilder:scaffold:imports
 )
@@ -62,6 +63,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var prometheusURL string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,6 +82,10 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&prometheusURL, "prometheus-url", "",
+		"Base URL of the Prometheus instance the evidence collector queries for Metric items "+
+			"(e.g. http://prometheus.monitoring:9090). Empty disables metric collection; "+
+			"the bundle then honestly carries no Metric evidence.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -179,9 +185,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The evidence path sees the cluster only through the secretless
+	// evidence.Reader over the uncached API reader: one-shot collections
+	// need no informers, and the narrow interface is the type-level half
+	// of the no-secrets invariant.
+	var promClient evidence.QueryClient
+	if prometheusURL != "" {
+		qc, err := evidence.NewHTTPQueryClient(prometheusURL)
+		if err != nil {
+			setupLog.Error(err, "Failed to parse --prometheus-url")
+			os.Exit(1)
+		}
+		promClient = qc
+	}
 	if err := (&controller.IncidentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		Collector: &evidence.Collector{
+			Reader: evidence.NewReader(mgr.GetAPIReader()),
+			Prom:   promClient,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "incident")
 		os.Exit(1)
