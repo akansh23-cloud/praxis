@@ -26,7 +26,9 @@ import (
 //     the typed k8s API and exactly one controller-runtime path —
 //     pkg/client, wrapped once into the secretless Reader whose closed
 //     method set reader_test.go pins. Anything else from
-//     controller-runtime (manager, cache, builder) stays out.
+//     controller-runtime (manager, cache, builder) stays out. Its logs
+//     subpackage (Session 3.2: Loki client + templating) is held to the
+//     same list and in practice imports only the standard library.
 //
 // (Benchmark internals live in the bench module, which the main module
 // does not depend on at all — that direction is impossible by
@@ -55,6 +57,10 @@ var seamImportRules = []struct {
 	{name: "internal/agents", dir: ".", allowed: agentSeamImports},
 	{name: "internal/agents/rulebased", dir: "rulebased", allowed: agentSeamImports},
 	{name: "internal/evidence", dir: "../evidence", allowed: evidenceImports},
+	// The log templating subpackage (Session 3.2) is stdlib-only by
+	// design: no Drain library, no HTTP framework, nothing that could
+	// grow into a client — the same allowlist proves it.
+	{name: "internal/evidence/logs", dir: "../evidence/logs", allowed: evidenceImports},
 }
 
 // forbiddenImportSubstrings name the classes of dependency whose absence
