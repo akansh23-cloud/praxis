@@ -56,6 +56,7 @@ type clusterReader struct {
 	c client.Reader
 }
 
+// ListPods implements Reader.
 func (r *clusterReader) ListPods(ctx context.Context, namespace string) ([]corev1.Pod, error) {
 	var list corev1.PodList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -64,6 +65,7 @@ func (r *clusterReader) ListPods(ctx context.Context, namespace string) ([]corev
 	return list.Items, nil
 }
 
+// ListEvents implements Reader.
 func (r *clusterReader) ListEvents(ctx context.Context, namespace string) ([]corev1.Event, error) {
 	var list corev1.EventList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -72,6 +74,7 @@ func (r *clusterReader) ListEvents(ctx context.Context, namespace string) ([]cor
 	return list.Items, nil
 }
 
+// ListDeployments implements Reader.
 func (r *clusterReader) ListDeployments(ctx context.Context, namespace string) ([]appsv1.Deployment, error) {
 	var list appsv1.DeploymentList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -80,6 +83,7 @@ func (r *clusterReader) ListDeployments(ctx context.Context, namespace string) (
 	return list.Items, nil
 }
 
+// ListReplicaSets implements Reader.
 func (r *clusterReader) ListReplicaSets(ctx context.Context, namespace string) ([]appsv1.ReplicaSet, error) {
 	var list appsv1.ReplicaSetList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -88,6 +92,7 @@ func (r *clusterReader) ListReplicaSets(ctx context.Context, namespace string) (
 	return list.Items, nil
 }
 
+// ListStatefulSets implements Reader.
 func (r *clusterReader) ListStatefulSets(ctx context.Context, namespace string) ([]appsv1.StatefulSet, error) {
 	var list appsv1.StatefulSetList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -96,6 +101,7 @@ func (r *clusterReader) ListStatefulSets(ctx context.Context, namespace string) 
 	return list.Items, nil
 }
 
+// ListDaemonSets implements Reader.
 func (r *clusterReader) ListDaemonSets(ctx context.Context, namespace string) ([]appsv1.DaemonSet, error) {
 	var list appsv1.DaemonSetList
 	if err := r.c.List(ctx, &list, client.InNamespace(namespace)); err != nil {

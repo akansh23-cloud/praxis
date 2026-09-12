@@ -71,6 +71,7 @@ type lokiResponse struct {
 	} `json:"data"`
 }
 
+// QueryRange implements Client.
 func (c *HTTPClient) QueryRange(ctx context.Context, logql string, start, end time.Time, limit int) ([]Stream, error) {
 	q := url.Values{}
 	q.Set("query", logql)

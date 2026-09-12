@@ -22,11 +22,21 @@ import (
 type ActionType string
 
 const (
-	ActionRestartWorkload     ActionType = "RestartWorkload"
-	ActionScaleWorkload       ActionType = "ScaleWorkload"
-	ActionRollbackRelease     ActionType = "RollbackRelease"
+	// ActionRestartWorkload triggers a rolling restart of the target
+	// workload (a pod-template annotation bump).
+	ActionRestartWorkload ActionType = "RestartWorkload"
+	// ActionScaleWorkload changes the target's replica count within the
+	// declared bounds (ScaleWorkloadParams).
+	ActionScaleWorkload ActionType = "ScaleWorkload"
+	// ActionRollbackRelease returns the target to a previous revision
+	// (RollbackReleaseParams).
+	ActionRollbackRelease ActionType = "RollbackRelease"
+	// ActionPatchResourceLimits changes one container's resource limits
+	// (PatchResourceLimitsParams).
 	ActionPatchResourceLimits ActionType = "PatchResourceLimits"
-	ActionCordonNode          ActionType = "CordonNode"
+	// ActionCordonNode marks a Node unschedulable; the only verb that
+	// targets a Node.
+	ActionCordonNode ActionType = "CordonNode"
 )
 
 // TargetRef identifies exactly one object an action operates on. Wildcards
@@ -152,7 +162,11 @@ type Hypothesis struct {
 type FailureAction string
 
 const (
+	// FailureActionRollback restores the snapshot when verification fails;
+	// requires a rollback strategy other than None.
 	FailureActionRollback FailureAction = "Rollback"
+	// FailureActionEscalate leaves the change in place and pages a human
+	// when verification fails.
 	FailureActionEscalate FailureAction = "Escalate"
 )
 
@@ -182,8 +196,11 @@ type VerificationSpec struct {
 type RollbackStrategy string
 
 const (
+	// RollbackRestorePreviousSpec re-applies the pre-change snapshot of
+	// every target.
 	RollbackRestorePreviousSpec RollbackStrategy = "RestorePreviousSpec"
-	RollbackNone                RollbackStrategy = "None"
+	// RollbackNone declares the plan is not to be reversed automatically.
+	RollbackNone RollbackStrategy = "None"
 )
 
 // RollbackSpec declares intent only. The snapshot that makes rollback
@@ -237,15 +254,33 @@ type RemediationPlanSpec struct {
 type PlanPhase string
 
 const (
-	PlanPhasePending          PlanPhase = "Pending"
-	PlanPhaseValidating       PlanPhase = "Validating"
+	// PlanPhasePending is the initial phase before the controller picks
+	// the plan up.
+	PlanPhasePending PlanPhase = "Pending"
+	// PlanPhaseValidating runs the cheapest-first gates: evidence hash,
+	// citations, scope, risk, policy, RBAC feasibility, dry-run.
+	PlanPhaseValidating PlanPhase = "Validating"
+	// PlanPhaseAwaitingApproval means every gate passed and a hash-bound
+	// human approval is required.
 	PlanPhaseAwaitingApproval PlanPhase = "AwaitingApproval"
-	PlanPhaseExecuting        PlanPhase = "Executing"
-	PlanPhaseVerifying        PlanPhase = "Verifying"
-	PlanPhaseSucceeded        PlanPhase = "Succeeded"
-	PlanPhaseFailed           PlanPhase = "Failed"
-	PlanPhaseRolledBack       PlanPhase = "RolledBack"
-	PlanPhaseRejected         PlanPhase = "Rejected"
+	// PlanPhaseExecuting means the executor is applying the actions
+	// (Phase 5; unreachable until then).
+	PlanPhaseExecuting PlanPhase = "Executing"
+	// PlanPhaseVerifying means the verification predicate is being
+	// evaluated over its window.
+	PlanPhaseVerifying PlanPhase = "Verifying"
+	// PlanPhaseSucceeded is terminal: the predicate held for the whole
+	// window.
+	PlanPhaseSucceeded PlanPhase = "Succeeded"
+	// PlanPhaseFailed is terminal: execution or verification failed
+	// without (or beyond) rollback.
+	PlanPhaseFailed PlanPhase = "Failed"
+	// PlanPhaseRolledBack is terminal: the snapshot was restored after a
+	// failure.
+	PlanPhaseRolledBack PlanPhase = "RolledBack"
+	// PlanPhaseRejected is terminal: a validation gate refused the plan;
+	// the reason names the gate.
+	PlanPhaseRejected PlanPhase = "Rejected"
 )
 
 // RiskTier buckets the numeric blast-radius score for policy and display.

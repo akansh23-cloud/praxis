@@ -137,6 +137,7 @@ type ValidationError struct {
 	Violations []string
 }
 
+// Error implements error.
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("spec violates the RemediationPlan schema (%d violation(s)): %s",
 		len(e.Violations), strings.Join(e.Violations, "; "))

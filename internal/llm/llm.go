@@ -163,6 +163,7 @@ type ProviderError struct {
 	Message    string
 }
 
+// Error implements error.
 func (e *ProviderError) Error() string {
 	if e.StatusCode != 0 {
 		return fmt.Sprintf("%s: %s (HTTP %d): %s", e.Provider, e.Kind, e.StatusCode, e.Message)

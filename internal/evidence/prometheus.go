@@ -206,6 +206,8 @@ type promResponse struct {
 	} `json:"data"`
 }
 
+// Query implements QueryClient: one instant query, bounded and honest
+// about failure.
 func (c *HTTPQueryClient) Query(ctx context.Context, promql string) ([]Sample, error) {
 	endpoint := c.base + "/api/v1/query?query=" + url.QueryEscape(promql)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

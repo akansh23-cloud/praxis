@@ -15,9 +15,14 @@ import (
 type IncidentSource string
 
 const (
+	// IncidentSourceAlertmanager marks an Incident created from an
+	// Alertmanager webhook.
 	IncidentSourceAlertmanager IncidentSource = "Alertmanager"
-	IncidentSourceProbe        IncidentSource = "Probe"
-	IncidentSourceManual       IncidentSource = "Manual"
+	// IncidentSourceProbe marks an Incident created from a failing probe.
+	IncidentSourceProbe IncidentSource = "Probe"
+	// IncidentSourceManual marks an Incident an operator (or the benchmark
+	// harness) filed by hand.
+	IncidentSourceManual IncidentSource = "Manual"
 )
 
 // Severity follows the usual on-call ladder.
@@ -64,12 +69,22 @@ type IncidentSpec struct {
 type IncidentPhase string
 
 const (
-	IncidentPhaseDetected    IncidentPhase = "Detected"
-	IncidentPhaseCollecting  IncidentPhase = "Collecting"
-	IncidentPhaseAnalyzed    IncidentPhase = "Analyzed"
+	// IncidentPhaseDetected is the initial phase: the Incident exists and
+	// no evidence has been collected yet.
+	IncidentPhaseDetected IncidentPhase = "Detected"
+	// IncidentPhaseCollecting means the evidence collector is assembling
+	// the bundle.
+	IncidentPhaseCollecting IncidentPhase = "Collecting"
+	// IncidentPhaseAnalyzed means a bundle is persisted and
+	// status.evidenceBundleHash is set; analysis may proceed.
+	IncidentPhaseAnalyzed IncidentPhase = "Analyzed"
+	// IncidentPhaseRemediating means a RemediationPlan referencing the
+	// Incident is executing (Phase 5).
 	IncidentPhaseRemediating IncidentPhase = "Remediating"
-	IncidentPhaseResolved    IncidentPhase = "Resolved"
-	IncidentPhaseClosed      IncidentPhase = "Closed"
+	// IncidentPhaseResolved means a referencing plan reached Succeeded.
+	IncidentPhaseResolved IncidentPhase = "Resolved"
+	// IncidentPhaseClosed is the terminal phase, reached manually or by TTL.
+	IncidentPhaseClosed IncidentPhase = "Closed"
 )
 
 // IncidentStatus is written by the evidence collector and plan controllers.

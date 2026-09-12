@@ -27,6 +27,7 @@ type CitationError struct {
 	Refused    Hypotheses
 }
 
+// Error implements error; it names the reason and the unresolved ids.
 func (e *CitationError) Error() string {
 	ids := make([]string, 0, len(e.Unresolved))
 	for _, id := range e.Unresolved {
@@ -43,6 +44,7 @@ type SchemaError struct {
 	Violations []string
 }
 
+// Error implements error; it names the reason and every violation.
 func (e *SchemaError) Error() string {
 	return fmt.Sprintf("%s: output still violates the plan schema after %d attempt(s): %s",
 		praxisv1alpha1.ReasonSchemaInvalid, e.Attempts, strings.Join(e.Violations, "; "))

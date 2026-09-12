@@ -27,13 +27,25 @@ const SchemaVersion = "1"
 type ItemType string
 
 const (
-	ItemTypePodStatus   ItemType = "PodStatus"
-	ItemTypeEvent       ItemType = "Event"
-	ItemTypeOwnerChain  ItemType = "OwnerChain"
-	ItemTypeMetric      ItemType = "Metric"
+	// ItemTypePodStatus is a pod's phase, readiness and per-container
+	// state (env variable names only).
+	ItemTypePodStatus ItemType = "PodStatus"
+	// ItemTypeEvent is a Warning Event in the incident's scope.
+	ItemTypeEvent ItemType = "Event"
+	// ItemTypeOwnerChain is a pod's owner chain up to its workload.
+	ItemTypeOwnerChain ItemType = "OwnerChain"
+	// ItemTypeMetric is one Prometheus query result from the code-owned
+	// RED/USE/SLO-burn template set.
+	ItemTypeMetric ItemType = "Metric"
+	// ItemTypeLogTemplate is one Drain-style log template with its count,
+	// contributing pods and exactly one exemplar (ADR-007); never a raw line.
 	ItemTypeLogTemplate ItemType = "LogTemplate"
-	ItemTypeSyncState   ItemType = "SyncState"
-	ItemTypeGitCommit   ItemType = "GitCommit"
+	// ItemTypeSyncState is desired-state divergence reported by a GitOps
+	// controller (Phase 6).
+	ItemTypeSyncState ItemType = "SyncState"
+	// ItemTypeGitCommit is recent-change context read from workload
+	// annotations (kubernetes.io/change-cause, praxis.dev/commit).
+	ItemTypeGitCommit ItemType = "GitCommit"
 )
 
 // sourceTokens maps each §6 evidence type to the lowercase token its item
