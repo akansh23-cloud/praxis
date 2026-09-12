@@ -80,15 +80,20 @@ var retentionRank = map[ItemType]int{
 
 // workItem is a Collected plus the cached canonical form of its data,
 // which serves as the final sort tie-break so even two items with an
-// identical (type, source, key) tuple order deterministically.
+// identical (type, source, key) tuple order deterministically, and
+// whether the scrubber changed any of its values.
 type workItem struct {
 	Collected
 	canonicalData string
+	redacted      bool
 }
 
 // Assemble builds the canonical §6 bundle from collector output:
 //
-//  1. every item's data is copied and truncated to the 4 KiB item cap;
+//  1. every item's data is copied, every value is scrubbed (redact.go —
+//     the item is marked redacted when anything was replaced), and the
+//     item is truncated to the 4 KiB item cap; scrubbing comes first so
+//     a cut can never leave the visible half of a credential behind;
 //  2. items sort by (type, source, natural key), canonical data bytes as
 //     the final tie-break;
 //  3. the 64-item and 128 KiB caps are enforced by dropping, one item at a
@@ -117,14 +122,21 @@ func Assemble(incident IncidentRef, collectedAt time.Time, collected []Collected
 		if c.Data == nil {
 			c.Data = map[string]string{}
 		}
-		if err := fitToItemCap(&c); err != nil {
+		redacted := false
+		for k, v := range c.Data {
+			if scrubbed, changed := Scrub(v); changed {
+				c.Data[k] = scrubbed
+				redacted = true
+			}
+		}
+		if err := fitToItemCap(&c, redacted); err != nil {
 			return nil, nil, "", fmt.Errorf("evidence item %d (%s): %w", i, c.Type, err)
 		}
 		canonical, err := hash.CanonicalJSON(c.Data)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("canonicalize data of evidence item %d (%s): %w", i, c.Type, err)
 		}
-		work = append(work, workItem{Collected: c, canonicalData: string(canonical)})
+		work = append(work, workItem{Collected: c, canonicalData: string(canonical), redacted: redacted})
 	}
 
 	slices.SortFunc(work, func(a, b workItem) int {
@@ -181,10 +193,10 @@ func dropLowestPriority(work []workItem) []workItem {
 // on a rune boundary and mark the cut with "…"; entries too short to
 // shrink are removed outright. Values dominate item size, so this
 // converges; the marker keeps the cut visible to any reader.
-func fitToItemCap(c *Collected) error {
+func fitToItemCap(c *Collected, redacted bool) error {
 	const marker = "…"
 	for {
-		probe := Item{ID: ItemID(c.Type, MaxItems), Type: c.Type, Source: c.Source, Data: c.Data}
+		probe := Item{ID: ItemID(c.Type, MaxItems), Type: c.Type, Source: c.Source, Data: c.Data, Redacted: redacted}
 		raw, err := hash.CanonicalJSON(probe)
 		if err != nil {
 			return fmt.Errorf("canonicalize while fitting to item cap: %w", err)
@@ -219,10 +231,11 @@ func renderItems(bundle *Bundle, work []workItem) ([]byte, error) {
 	for _, w := range work {
 		seq[w.Type]++
 		items = append(items, Item{
-			ID:     ItemID(w.Type, seq[w.Type]),
-			Type:   w.Type,
-			Source: w.Source,
-			Data:   w.Data,
+			ID:       ItemID(w.Type, seq[w.Type]),
+			Type:     w.Type,
+			Source:   w.Source,
+			Data:     w.Data,
+			Redacted: w.redacted,
 		})
 	}
 	bundle.Items = items

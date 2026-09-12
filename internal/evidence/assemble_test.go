@@ -44,6 +44,14 @@ const (
 	goldenRS      = "checkout-api-7d9c6f5b4"
 	otherNS       = "other"
 	valFalse      = "false"
+
+	stateOOMKilled  = "OOMKilled:exit=137"
+	stateCrashLoop  = "waiting:CrashLoopBackOff"
+	keyWorkloadKind = "workloadKind"
+	eventWarning    = "Warning"
+	reasonUnhealthy = "Unhealthy"
+	tmplPlantedErr  = "planted-error"
+	goldenChain     = "Pod/checkout-api-7d9c6f5b4-x2m8q -> ReplicaSet/checkout-api-7d9c6f5b4 -> Deployment/checkout-api"
 )
 
 func testIncidentRef() IncidentRef {
@@ -62,16 +70,16 @@ func goldenCollected() []Collected {
 		}},
 		{Type: ItemTypePodStatus, Source: SourceK8s, Key: goldenPodKey, Data: map[string]string{
 			keyNamespace: goldenNS, "name": goldenPod, "phase": "Running",
-			"ready": valFalse, "container.session-cache.lastTerminated": "OOMKilled:exit=137",
-			"container.session-cache.restartCount": "4", "container.session-cache.state": "waiting:CrashLoopBackOff",
+			"ready": valFalse, "container.session-cache.lastTerminated": stateOOMKilled,
+			"container.session-cache.restartCount": "4", "container.session-cache.state": stateCrashLoop,
 		}},
 		{Type: ItemTypeGitCommit, Source: SourceK8s, Key: "shop/Deployment/checkout-api", Data: map[string]string{
-			"workloadKind": kindDeployment, "workloadName": goldenDeploy, keyNamespace: goldenNS,
+			keyWorkloadKind: kindDeployment, CommitDataWorkloadName: goldenDeploy, keyNamespace: goldenNS,
 			"changeCause": goldenCause,
 			"commit":      goldenCommit,
 		}},
 		{Type: ItemTypeEvent, Source: SourceK8s, Key: "shop/Pod/checkout-api-7d9c6f5b4-x2m8q/BackOff", Data: map[string]string{
-			EventDataType: "Warning", EventDataReason: reasonBackOff,
+			EventDataType: eventWarning, EventDataReason: reasonBackOff,
 			EventDataMessage:      "Back-off restarting failed container session-cache in pod checkout-api-7d9c6f5b4-x2m8q",
 			EventDataInvolvedKind: kindPodTest, EventDataInvolvedName: goldenPod,
 			EventDataInvolvedNamespace: goldenNS, EventDataCount: "6",
@@ -83,11 +91,11 @@ func goldenCollected() []Collected {
 		}},
 		{Type: ItemTypeOwnerChain, Source: SourceK8s, Key: goldenPodKey, Data: map[string]string{
 			keyNamespace: goldenNS, "pod": goldenPod,
-			"chain":        "Pod/checkout-api-7d9c6f5b4-x2m8q -> ReplicaSet/checkout-api-7d9c6f5b4 -> Deployment/checkout-api",
-			"workloadKind": kindDeployment, "workloadName": goldenDeploy,
+			"chain":         goldenChain,
+			keyWorkloadKind: kindDeployment, OwnerDataWorkloadName: goldenDeploy,
 		}},
 		{Type: ItemTypeEvent, Source: SourceK8s, Key: "shop/Pod/checkout-api-7d9c6f5b4-x2m8q/Unhealthy", Data: map[string]string{
-			EventDataType: "Warning", EventDataReason: "Unhealthy",
+			EventDataType: eventWarning, EventDataReason: reasonUnhealthy,
 			EventDataMessage:      "Readiness probe failed: Get \"http://10.244.0.12:8080/ready\": dial tcp: connect: connection refused",
 			EventDataInvolvedKind: kindPodTest, EventDataInvolvedName: goldenPod,
 			EventDataInvolvedNamespace: goldenNS, EventDataCount: "2",
@@ -360,8 +368,8 @@ func TestAssembleItemCap(t *testing.T) {
 		Source: SourceLoki,
 		Key:    hugeItemKey,
 		Data: map[string]string{
-			keyTemplate: strings.Repeat("a", 10*1024),
-			"count":     "12",
+			keyTemplate:  strings.Repeat("a", 10*1024),
+			LogDataCount: "12",
 		},
 	}}
 	b1, raw1, hash1 := mustAssemble(t, in)
@@ -370,8 +378,8 @@ func TestAssembleItemCap(t *testing.T) {
 		Source: SourceLoki,
 		Key:    hugeItemKey,
 		Data: map[string]string{
-			keyTemplate: strings.Repeat("a", 10*1024),
-			"count":     "12",
+			keyTemplate:  strings.Repeat("a", 10*1024),
+			LogDataCount: "12",
 		},
 	}})
 
@@ -389,7 +397,7 @@ func TestAssembleItemCap(t *testing.T) {
 	if !strings.HasSuffix(it.Data[keyTemplate], "…") {
 		t.Error("truncated value does not carry the … marker")
 	}
-	if it.Data["count"] != "12" {
+	if it.Data[LogDataCount] != "12" {
 		t.Error("truncation touched a value it did not need to")
 	}
 }
@@ -485,5 +493,122 @@ func TestAssembleDoesNotMutateInput(t *testing.T) {
 	mustAssemble(t, in)
 	if len(in[0].Data[keyTemplate]) != 10*1024 {
 		t.Error("Assemble mutated the caller's data map")
+	}
+}
+
+// TestAssembleScrubsEveryValueAndFlagsTheItem: the scrubber runs over
+// every data value of every item type in one place — the assembler — so
+// a credential riding on an annotation, an event message or a metric
+// error is caught exactly like one in a log exemplar; touched items are
+// marked redacted, untouched items are not.
+func TestAssembleScrubsEveryValueAndFlagsTheItem(t *testing.T) {
+	in := slices.Concat(goldenCollected(), []Collected{
+		{Type: ItemTypeGitCommit, Source: SourceK8s, Key: "shop/Deployment/planted", Data: map[string]string{
+			keyNamespace: goldenNS, keyWorkloadKind: kindDeployment, CommitDataWorkloadName: "planted",
+			"changeCause": "kubectl set env deploy/planted DATABASE_URL=" + plantedURL + " AWS_ACCESS_KEY_ID=" + plantedAWSKey + " --record",
+			"commit":      goldenCommit,
+		}},
+		{Type: ItemTypeEvent, Source: SourceK8s, Key: "shop/Pod/planted/Unhealthy", Data: map[string]string{
+			EventDataType: eventWarning, EventDataReason: reasonUnhealthy,
+			EventDataMessage: "Liveness probe failed: curl -H 'Authorization: Bearer " + plantedJWT + "' returned 401",
+		}},
+		{Type: ItemTypeMetric, Source: SourcePrometheus, Key: tmplPlantedErr, Data: map[string]string{
+			keyTemplate: tmplPlantedErr, "error": "Get \"" + plantedURL + "\": connection refused",
+		}},
+		{Type: ItemTypeLogTemplate, Source: SourceLoki, Key: "shop/api/planted", Data: map[string]string{
+			keyTemplate:  "loaded credentials PASSWORD=<*> key " + plantedAWSSecret,
+			"exemplar":   "loaded credentials PASSWORD=" + plantedAssignment + " key " + plantedAWSSecret + " " + plantedPEM,
+			LogDataCount: "3",
+		}},
+	})
+	b, raw, _ := mustAssemble(t, in)
+	assertPlantedAbsent(t, "canonical bundle bytes", string(raw))
+
+	for _, it := range b.Items {
+		for k, v := range it.Data {
+			assertPlantedAbsent(t, "item "+it.ID+" field "+k, v)
+		}
+	}
+	// Every planted item is flagged; every Session 3.1 clean fixture is not.
+	planted := map[string]func(Item) bool{
+		"GitCommit annotation": func(it Item) bool { return it.Data[CommitDataWorkloadName] == "planted" },
+		"Event message":        func(it Item) bool { return strings.HasPrefix(it.Data[EventDataMessage], "Liveness") },
+		"Metric error":         func(it Item) bool { return it.Data[keyTemplate] == tmplPlantedErr },
+		"LogTemplate":          func(it Item) bool { return strings.HasPrefix(it.Data[keyTemplate], "loaded credentials") },
+	}
+	for name, matches := range planted {
+		found := false
+		for _, it := range b.Items {
+			if matches(it) {
+				found = true
+				if !it.Redacted {
+					t.Errorf("%s item %s carries scrubbed content but is not flagged redacted", name, it.ID)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("planted %s item missing from the bundle", name)
+		}
+	}
+	for _, it := range b.Items {
+		clean := it.Data["changeCause"] == goldenCause || it.Data[EventDataReason] == reasonBackOff ||
+			it.Data[keyTemplate] == tmplUseMemory || it.Data["pod"] == goldenPod
+		if clean && it.Redacted {
+			t.Errorf("clean item %s was flagged redacted", it.ID)
+		}
+	}
+	for _, marker := range []string{"«redacted:url-credentials»", "«redacted:aws-access-key»", "«redacted:jwt»", markerPEM, "«redacted:opaque-token»", "«redacted:credential-assignment»"} {
+		if !strings.Contains(string(raw), marker) {
+			t.Errorf("expected marker %s in the bundle bytes", marker)
+		}
+	}
+}
+
+// TestAssembleScrubsBeforeTruncation: an access key straddling the exact
+// point where the item cap cuts a value would survive as a visible
+// fragment if truncation ran first; scrubbing first removes it whole.
+func TestAssembleScrubsBeforeTruncation(t *testing.T) {
+	// Word-separated filler, so the key sits on a word boundary exactly
+	// where the halving cut of fitToItemCap would land.
+	const total = 12 * 1024
+	half := total/2 - len(plantedAWSKey)/2
+	value := strings.Repeat("x ", half/2) + plantedAWSKey + strings.Repeat(" x", half/2)
+	b, raw, _ := mustAssemble(t, []Collected{{
+		Type: ItemTypeLogTemplate, Source: SourceLoki, Key: hugeItemKey,
+		Data: map[string]string{"exemplar": value},
+	}})
+	assertPlantedAbsent(t, "truncated item bytes", string(raw))
+	if !b.Items[0].Redacted {
+		t.Error("item with a scrubbed value is not marked redacted")
+	}
+	if !strings.HasSuffix(b.Items[0].Data["exemplar"], "…") {
+		t.Error("the oversized value was not truncated")
+	}
+}
+
+// TestAssembleLogTemplatesYieldUnderPressure (ADR-006 with real log
+// evidence): LogTemplate items produced by the Loki collector are the
+// first non-OwnerChain victims of the item cap — every one of them goes
+// before a single Event, PodStatus, Metric, SyncState or GitCommit.
+func TestAssembleLogTemplatesYieldUnderPressure(t *testing.T) {
+	logItems, _ := CollectLogs(t.Context(), logFixture(), []string{goldenNS}, fixedNow)
+	if len(logItems) != 4 {
+		t.Fatalf("fixture yields %d log templates, want 4", len(logItems))
+	}
+	in := slices.Concat(
+		filler(ItemTypePodStatus, SourceK8s, 60, 16),
+		filler(ItemTypeEvent, SourceK8s, 5, 16),
+		logItems,
+	)
+	b, _, _ := mustAssemble(t, in)
+	got := countByType(b)
+	want := map[ItemType]int{ItemTypePodStatus: 60, ItemTypeEvent: 4}
+	if !mapsEqualTyped(got, want) {
+		t.Errorf("survivors = %v, want %v (all LogTemplate items dropped before any Event)", got, want)
+	}
+	// With room to spare, the same log items all survive intact.
+	b, _, _ = mustAssemble(t, slices.Concat(filler(ItemTypePodStatus, SourceK8s, 10, 16), logItems))
+	if n := countByType(b)[ItemTypeLogTemplate]; n != 4 {
+		t.Errorf("%d LogTemplate items survived an under-cap bundle, want 4", n)
 	}
 }

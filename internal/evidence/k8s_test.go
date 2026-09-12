@@ -8,6 +8,7 @@ package evidence
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -71,6 +72,13 @@ func controllerRef(kind, name string) metav1.OwnerReference {
 
 func int32ptr(v int32) *int32 { return &v }
 
+// appsDeployment builds a minimal shop Deployment carrying annotations.
+func appsDeployment(name string, annotations map[string]string) appsv1.Deployment {
+	return appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: goldenNS, Annotations: annotations,
+	}}
+}
+
 // oomFixture is the shop namespace mid-oomkill: a crash-looping pod owned
 // by a Deployment through a ReplicaSet, the deployment carrying the
 // change annotations the fault stamped, plus one Warning and one Normal
@@ -86,7 +94,7 @@ func oomFixture() *fakeReader {
 				Phase:      corev1.PodRunning,
 				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
 				ContainerStatuses: []corev1.ContainerStatus{{
-					Name: "session-cache", Image: "registry.k8s.io/e2e-test-images/agnhost:2.53",
+					Name: ctrSessionCache, Image: "registry.k8s.io/e2e-test-images/agnhost:2.53",
 					Ready: false, RestartCount: 4,
 					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
 						Reason: "CrashLoopBackOff", Message: "back-off 1m20s restarting failed container",
@@ -164,9 +172,9 @@ func TestCollectKubernetesOOMScenario(t *testing.T) {
 		"container.session-cache.image":          "registry.k8s.io/e2e-test-images/agnhost:2.53",
 		"container.session-cache.ready":          valFalse,
 		"container.session-cache.restartCount":   "4",
-		"container.session-cache.state":          "waiting:CrashLoopBackOff",
+		"container.session-cache.state":          stateCrashLoop,
 		"container.session-cache.waitingMessage": "back-off 1m20s restarting failed container",
-		"container.session-cache.lastTerminated": "OOMKilled:exit=137",
+		"container.session-cache.lastTerminated": stateOOMKilled,
 	}
 	for k, want := range wantPod {
 		if got := pod[0].Data[k]; got != want {
@@ -181,9 +189,8 @@ func TestCollectKubernetesOOMScenario(t *testing.T) {
 	if len(chains) != 1 {
 		t.Fatalf("got %d OwnerChain items, want 1", len(chains))
 	}
-	wantChain := "Pod/checkout-api-7d9c6f5b4-x2m8q -> ReplicaSet/checkout-api-7d9c6f5b4 -> Deployment/checkout-api"
-	if got := chains[0].Data[OwnerDataChain]; got != wantChain {
-		t.Errorf("chain = %q, want %q", got, wantChain)
+	if got := chains[0].Data[OwnerDataChain]; got != goldenChain {
+		t.Errorf("chain = %q, want %q", got, goldenChain)
 	}
 	if chains[0].Data[OwnerDataWorkloadKind] != kindDeployment ||
 		chains[0].Data[OwnerDataWorkloadName] != goldenDeploy {
@@ -338,5 +345,76 @@ func TestCollectKubernetesFeedsAssembler(t *testing.T) {
 	}
 	if _, _, _, err := Assemble(testIncidentRef(), fixedCollectedAt, items); err != nil {
 		t.Fatalf("assembler rejected collector output: %v", err)
+	}
+}
+
+// TestCollectKubernetesEnvNamesOnly (LLD §6: env values dropped, names
+// kept): a container's env list is represented by variable NAMES only —
+// literal values never enter an item, valueFrom references are named by
+// their source kind (never the referenced object or key), and no read of
+// any referenced Secret can happen because the Reader has no such method.
+func TestCollectKubernetesEnvNamesOnly(t *testing.T) {
+	const plantedValue = "hunter2-literal-env-value-FAKE"
+	r := &fakeReader{pods: map[string][]corev1.Pod{goldenNS: {{
+		ObjectMeta: metav1.ObjectMeta{Name: goldenPod, Namespace: goldenNS},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{
+				Name: "migrate",
+				Env:  []corev1.EnvVar{{Name: "DB_URL", Value: "postgres://" + plantedValue + "@db/shop"}},
+			}},
+			Containers: []corev1.Container{{
+				Name: "api",
+				Env: []corev1.EnvVar{
+					{Name: "DB_HOST", Value: "db.shop.svc"},
+					{Name: "DB_PASSWORD", Value: plantedValue},
+					{Name: "AWS_SECRET_ACCESS_KEY", ValueFrom: &corev1.EnvVarSource{
+						SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "aws-creds-secret-object"},
+							Key:                  "secret-key-name",
+						}}},
+					{Name: "LOG_LEVEL", ValueFrom: &corev1.EnvVarSource{
+						ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"},
+							Key:                  "level",
+						}}},
+					{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+						FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
+					{Name: "CPU_LIMIT", ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{Resource: "limits.cpu"}}},
+				},
+			}, {
+				Name: "sidecar", // no env at all: no key invented
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}}}}
+	items, err := CollectKubernetes(context.Background(), r, []string{goldenNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods := itemsOf(t, items, ItemTypePodStatus)
+	if len(pods) != 1 {
+		t.Fatalf("got %d PodStatus items, want 1", len(pods))
+	}
+	data := pods[0].Data
+	if got, want := data["container.api.env"], "DB_HOST,DB_PASSWORD,AWS_SECRET_ACCESS_KEY(secretKeyRef),LOG_LEVEL(configMapKeyRef),POD_IP(fieldRef),CPU_LIMIT(resourceFieldRef)"; got != want {
+		t.Errorf("container.api.env:\n got %q\nwant %q", got, want)
+	}
+	if got, want := data["container.migrate.env"], "DB_URL"; got != want {
+		t.Errorf("init container env names = %q, want %q", got, want)
+	}
+	if _, ok := data["container.sidecar.env"]; ok {
+		t.Error("a container without env got an env key invented")
+	}
+	// Values and referenced object/key names are absent from EVERY value
+	// of EVERY item, not just the env key.
+	for _, it := range items {
+		for k, v := range it.Data {
+			for _, forbidden := range []string{plantedValue, "db.shop.svc", "aws-creds-secret-object", "secret-key-name", "app-config", "status.podIP", "limits.cpu"} {
+				if strings.Contains(v, forbidden) {
+					t.Errorf("item %q field %q carries %q — env values and valueFrom targets must not enter evidence", it.Key, k, forbidden)
+				}
+			}
+		}
 	}
 }

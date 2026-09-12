@@ -233,12 +233,46 @@ func podStatusItem(pod *corev1.Pod) Collected {
 			data[prefix+"lastTerminated"] = fmt.Sprintf("%s:exit=%d", term.Reason, term.ExitCode)
 		}
 	}
+	for _, list := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
+		for i := range list {
+			if names := envNames(list[i].Env); names != "" {
+				data["container."+list[i].Name+".env"] = names
+			}
+		}
+	}
 	return Collected{
 		Type:   ItemTypePodStatus,
 		Source: SourceK8s,
 		Key:    pod.Namespace + "/" + pod.Name,
 		Data:   data,
 	}
+}
+
+// envNames renders a container's environment as variable NAMES only (LLD
+// §6: env values dropped, names kept). A literal value is never read; a
+// valueFrom reference is named by its source kind alone — not the
+// referenced Secret, ConfigMap or key — and is never resolved: the Reader
+// has no method that could fetch what it points at.
+func envNames(env []corev1.EnvVar) string {
+	names := make([]string, 0, len(env))
+	for i := range env {
+		e := &env[i]
+		name := e.Name
+		if from := e.ValueFrom; from != nil {
+			switch {
+			case from.SecretKeyRef != nil:
+				name += "(secretKeyRef)"
+			case from.ConfigMapKeyRef != nil:
+				name += "(configMapKeyRef)"
+			case from.FieldRef != nil:
+				name += "(fieldRef)"
+			case from.ResourceFieldRef != nil:
+				name += "(resourceFieldRef)"
+			}
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
 }
 
 func renderContainerState(state *corev1.ContainerState) string {
