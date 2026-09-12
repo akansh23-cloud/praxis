@@ -49,6 +49,16 @@ var evidenceImports = append([]string{
 	"sigs.k8s.io/yaml", // rbac_test.go parses the shipped roles
 }, agentSeamImports...)
 
+// llmAgentImports is the LLM agent's world: the seam, the LLMClient
+// INTERFACE package (never a provider — see providerImport), the
+// deterministic guards it runs over its own output, and the CRD-derived
+// planner schema.
+var llmAgentImports = append([]string{
+	"github.com/akansh23-cloud/praxis/internal/llm",
+	"github.com/akansh23-cloud/praxis/internal/planschema",
+	"github.com/akansh23-cloud/praxis/internal/validate",
+}, agentSeamImports...)
+
 var seamImportRules = []struct {
 	name    string
 	dir     string
@@ -56,6 +66,7 @@ var seamImportRules = []struct {
 }{
 	{name: "internal/agents", dir: ".", allowed: agentSeamImports},
 	{name: "internal/agents/rulebased", dir: "rulebased", allowed: agentSeamImports},
+	{name: "internal/agents/llm", dir: "llm", allowed: llmAgentImports},
 	{name: "internal/evidence", dir: "../evidence", allowed: evidenceImports},
 	// The log templating subpackage (Session 3.2) is stdlib-only by
 	// design: no Drain library, no HTTP framework, nothing that could
@@ -85,6 +96,12 @@ var forbiddenImportSubstrings = map[string]string{
 var agentOnlyForbidden = map[string]string{
 	"controller-runtime": whyNoClient,
 }
+
+// providerImport is forbidden in agent PRODUCTION files: an agent depends
+// on the LLMClient interface, never on a provider package, so provider
+// choice stays configuration. Tests may import the scripted fake under
+// internal/llm/llmtest.
+const providerImport = "github.com/akansh23-cloud/praxis/internal/llm/"
 
 func TestSeamPackagesImportOnlyTheAllowlist(t *testing.T) {
 	for _, rules := range seamImportRules {
@@ -122,6 +139,9 @@ func checkImports(t *testing.T, file string, allowedPrefixes []string, agentPack
 				if strings.Contains(path, substr) {
 					t.Errorf("%s imports %q: %s", file, path, why)
 				}
+			}
+			if strings.HasPrefix(path, providerImport) && !strings.HasSuffix(file, "_test.go") {
+				t.Errorf("%s imports %q: agents depend on the LLMClient interface, never on a provider package", file, path)
 			}
 		}
 		if isStdlib(path) {
