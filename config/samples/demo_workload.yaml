@@ -1,0 +1,52 @@
+# The demo workload behind the sample Incident (`make demo`): namespace
+# shop and the checkout-api Deployment whose OOMKill story the dossier
+# tells. The deployment carries the annotation-based recent-change context
+# the Session 3.1 evidence collector reads (kubernetes.io/change-cause +
+# praxis.dev/commit — the same convention the bench fault packs stamp), so
+# applying this and the sample Incident yields a REAL evidence bundle:
+# GitCommit context from these annotations, PodStatus and OwnerChain from
+# the live pods, Events from whatever the rollout emits. Nothing about the
+# bundle is staged beyond what is deployed here.
+#
+# The memory limit is 256Mi on container "api" deliberately: the sample
+# RemediationPlan proposes patching exactly that limit from 256Mi to
+# 512Mi, so the demo's plan tells the truth about the demo's cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels:
+    app.kubernetes.io/name: praxis-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: praxis-demo
+  annotations:
+    kubernetes.io/change-cause: "commit a91c4e: trim checkout-api memory to cut per-pod cost"
+    praxis.dev/commit: a91c4e7b2d90
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: checkout-api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+    spec:
+      containers:
+        - name: api
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["serve-hostname", "--port=8080"]
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

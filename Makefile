@@ -161,24 +161,46 @@ dev-skaffold: kind-up ## Dev loop running the manager in-cluster via Skaffold (r
 	}
 	skaffold dev --kube-context "kind-$(KIND_DEV_CLUSTER)"
 
-# demo drives the Phase 1 walk (docs/03-CLAUDE-CODE-PLAYBOOK.md, Sessions
-# 1.1 + 1.2) against the current kubeconfig context: apply the sample
-# Incident, give its status the evidence-bundle hash the sample plan cites
-# (status is writable only through the status subresource, hence
-# --subresource=status), apply the sample plan, then complete the approval
-# round-trip — read status.approval.boundTo, show the exact kubectl annotate
-# command a human would run, run it, and show the approved state. The hash
-# is read from the sample plan itself so the two can never drift apart. A
-# manager must be reconciling — `make dev` in another terminal — for the
-# plan to walk Pending → Validating → AwaitingApproval → approved.
-DEMO_EVIDENCE_HASH = $(shell awk '/evidenceBundleHash:/ {print $$2}' config/samples/praxis_v1alpha1_remediationplan.yaml)
-
+# demo drives the Session 3.1 evidence walk plus the Phase 1 approval
+# round-trip against the current kubeconfig context. Nothing is faked
+# anymore: the demo workload (namespace shop + an annotated checkout-api
+# Deployment) is applied, the sample Incident follows, and the manager's
+# evidence collector walks it Detected → Collecting → Analyzed by
+# assembling a REAL bounded bundle into ConfigMap praxis-ev-<uid8> and
+# recording ref+hash through the status subresource. The sample plan is
+# then applied citing that real hash (substituted from live status, so
+# plan and evidence can never drift), and the approval round-trip
+# completes exactly as in Phase 1 — boundTo shown, annotated, verified.
+# Deleting the previous sample incident/plan first makes the demo
+# re-runnable; the owner-referenced bundle ConfigMap is garbage-collected
+# with its incident. A manager must be reconciling — `make dev` in
+# another terminal.
 .PHONY: demo
-demo: ## Walk the sample plan to AwaitingApproval, then approve it with the hash-bound annotation (needs `make dev`).
+demo: ## Collect a real evidence bundle for the sample Incident, then walk the sample plan to a hash-bound approval (needs `make dev`).
+	$(KUBECTL) delete incident checkout-oomkill --ignore-not-found
+	@for p in $$($(KUBECTL) get remediationplans \
+		-o jsonpath='{range .items[?(@.spec.incidentRef.name=="checkout-oomkill")]}{.metadata.name}{"\n"}{end}'); do \
+		$(KUBECTL) delete remediationplan "$$p"; \
+	done
+	$(KUBECTL) apply -f config/samples/demo_workload.yaml
 	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_incident.yaml
-	$(KUBECTL) patch incident checkout-oomkill --subresource=status --type=merge \
-		-p '{"status":{"evidenceBundleHash":"$(DEMO_EVIDENCE_HASH)"}}'
-	$(KUBECTL) apply -f config/samples/praxis_v1alpha1_remediationplan.yaml
+	@echo "Waiting for the evidence collector to walk Detected -> Collecting -> Analyzed..."
+	@$(KUBECTL) wait --for=jsonpath='{.status.phase}'=Analyzed \
+		incident/checkout-oomkill --timeout=120s \
+		|| { echo "Incident never reached Analyzed — is a manager running? (make dev)"; exit 1; }
+	$(KUBECTL) get incidents
+	@ref=$$($(KUBECTL) get incident checkout-oomkill -o jsonpath='{.status.evidenceBundleRef}'); \
+	hash=$$($(KUBECTL) get incident checkout-oomkill -o jsonpath='{.status.evidenceBundleHash}'); \
+	echo ""; \
+	echo "The real evidence bundle ConfigMap ($$ref):"; \
+	$(KUBECTL) get configmap "$$ref"; \
+	echo ""; \
+	echo "The Incident carrying the real evidenceBundleRef + evidenceBundleHash:"; \
+	$(KUBECTL) get incident checkout-oomkill -o yaml; \
+	echo ""; \
+	echo "Applying the sample plan bound to the real evidence hash:"; \
+	sed -E "s|^(  evidenceBundleHash:).*|\\1 $$hash|" \
+		config/samples/praxis_v1alpha1_remediationplan.yaml | $(KUBECTL) apply -f -
 	@echo "Waiting for the plan to reach AwaitingApproval..."
 	@$(KUBECTL) wait --for=jsonpath='{.status.phase}'=AwaitingApproval \
 		remediationplan/checkout-oomkill-7f3a2c --timeout=60s \
