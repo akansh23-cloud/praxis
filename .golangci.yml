@@ -35,6 +35,24 @@ linters:
           deny:
             - pkg: sort
               desc: Should be replaced with slices package
+        # The LLM import boundary (playbook Session 3.3, LLD §2): only the
+        # analyzer-side seam — internal/llm, internal/agents and the
+        # benchmark's agent driver — may depend on model-facing code. The
+        # manager, the controllers, the evidence pipeline, the validators
+        # and every executor-side package are denied; "the process that
+        # acts has no model" is a lint failure, not a review comment.
+        llm-boundary:
+          files:
+            - "!**/internal/llm/**"
+            - "!**/internal/agents/**"
+            - "!**/bench/cli/agentrun/**"
+            - "!**/bench/cli/runner/**"
+            - "!**/bench/cli/praxisbench/**"
+          deny:
+            - pkg: github.com/akansh23-cloud/praxis/internal/llm
+              desc: only internal/llm, internal/agents and the benchmark agent driver may import model-facing code (LLD §2 import boundary)
+            - pkg: github.com/akansh23-cloud/praxis/internal/agents
+              desc: only internal/llm, internal/agents and the benchmark agent driver may import agent code (LLD §2 import boundary)
     revive:
       rules:
         - name: comment-spacings
