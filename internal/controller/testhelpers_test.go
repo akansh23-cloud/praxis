@@ -15,14 +15,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
 )
 
 const (
 	testNamespace = "default"
 
-	// evidenceHash is the hash the happy-path fixtures agree on; it matches
-	// the sample plan's placeholder value.
+	// evidenceHash is a well-formed hash no persisted bundle hashes to:
+	// the fixtures that need a hash WITHOUT a bundle (mismatch cases, the
+	// presupplied-hash walk) use it. It matches the sample plan's
+	// placeholder value.
 	evidenceHash = "sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f"
+
+	// fixtureCitation is the one id the fixture bundle holds; every
+	// fixture plan cites it, and only it, so citations resolve exactly
+	// when the incident carries the persisted fixture bundle.
+	fixtureCitation = "ev/podstatus-01"
 
 	// differentEvidenceHash is any other well-formed hash, for mismatch cases.
 	differentEvidenceHash = "sha256:abababababababababababababababababababababababababababababababab"
@@ -69,7 +77,7 @@ func newTestPlan(name, incidentName, bundleHash string) *praxisv1alpha1.Remediat
 			Hypothesis: praxisv1alpha1.Hypothesis{
 				Summary:           "Fixture workload needs a controlled restart",
 				ConfidencePercent: 80,
-				Citations:         []praxisv1alpha1.EvidenceID{"ev/pod-status-01"},
+				Citations:         []praxisv1alpha1.EvidenceID{fixtureCitation},
 			},
 			Actions: []praxisv1alpha1.Action{{
 				Type: praxisv1alpha1.ActionRestartWorkload,
@@ -89,6 +97,26 @@ func newTestPlan(name, incidentName, bundleHash string) *praxisv1alpha1.Remediat
 			},
 		},
 	}
+}
+
+// fixtureCollectedAt fixes the fixture bundle's timestamp so its bytes and
+// hash never move between runs.
+var fixtureCollectedAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+// fixtureBundle renders the deterministic bundle envtest incidents carry
+// through the real assembler: one PodStatus item, so fixtureCitation
+// resolves and nothing else does.
+func fixtureBundle(incident *praxisv1alpha1.Incident) (raw []byte, bundleHash string, err error) {
+	ref := evidence.IncidentRef{Name: incident.Name, UID: string(incident.UID)}
+	_, raw, bundleHash, err = evidence.Assemble(ref, fixtureCollectedAt, []evidence.Collected{{
+		Type: evidence.ItemTypePodStatus, Source: evidence.SourceK8s, Key: testNamespace + "/fixture-pod",
+		Data: map[string]string{
+			evidence.DataNamespace: testNamespace, evidence.DataName: "fixture-pod",
+			evidence.PodDataPhase: "Running", evidence.PodDataReady: "false",
+			"container.api.lastTerminated": "OOMKilled:exit=137",
+		},
+	}})
+	return raw, bundleHash, err
 }
 
 // statusWriteCountingClient wraps a real client and counts every write that

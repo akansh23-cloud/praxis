@@ -9,12 +9,13 @@ import (
 	"context"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
 )
 
-// ReasonStubbedInPhase1 is the Verdict reason every Phase-1 stub returns. It
-// lands verbatim in Condition.Reason so `kubectl describe` shows the check
-// passed only because it is not implemented yet — visible honesty over a
-// silent fake.
+// ReasonStubbedInPhase1 is the Verdict reason the remaining Phase-1 stub
+// (the scope checker, real in Phase 4) returns. It lands verbatim in
+// Condition.Reason so `kubectl describe` shows the check passed only
+// because it is not implemented yet — visible honesty over a silent fake.
 const ReasonStubbedInPhase1 = "StubbedInPhase1"
 
 // Verdict is the outcome of one validation check, expressed in the
@@ -30,14 +31,12 @@ type Verdict struct {
 
 // CitationValidator is the structural hallucination guard from LLD §5: every
 // evidence ID a hypothesis cites must resolve in the bundle the plan names.
-//
-// The LLD seam is Validate(Hypotheses, Bundle). The Bundle type belongs to
-// internal/evidence, which lands in Phase 3 (LLD §2), so until then the seam
-// takes what a Phase-1 controller can actually hand it: the plan's single
-// hypothesis and the evidence-bundle hash the plan claims. Session 3.3
-// replaces the stub and widens this to the real bundle.
+// The seam takes the bundle itself (LLD §5: Validate(Hypotheses, Bundle));
+// the caller is responsible for handing over the EXACT bundle the plan's
+// evidenceBundleHash names — the controller loads it from the persisted
+// ConfigMap and checks the bytes hash to that value first.
 type CitationValidator interface {
-	Validate(ctx context.Context, hypothesis praxisv1alpha1.Hypothesis, evidenceBundleHash string) (Verdict, error)
+	Validate(ctx context.Context, hypothesis praxisv1alpha1.Hypothesis, bundle *evidence.Bundle) (Verdict, error)
 }
 
 // ScopeChecker enforces LLD §10's first gate: every action's target must lie

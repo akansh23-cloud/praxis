@@ -15,6 +15,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -520,6 +521,41 @@ var _ = Describe("Incident evidence machine", func() {
 		mustReconcile(reconciler, incident) // → Collecting
 		mustReconcile(reconciler, incident) // → Analyzed, not Remediating
 		Expect(incident.Status.Phase).To(Equal(praxisv1alpha1.IncidentPhaseAnalyzed))
+	})
+
+	It("mirrors an agent-side analysis rejection into a condition and the NotCreated metric, exactly once", func() {
+		incident := newTestIncident(uniqueName("rejected-inc"))
+		Expect(k8sClient.Create(ctx, incident)).To(Succeed())
+		incident.Status.EvidenceBundleHash = evidenceHash
+		Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
+		mustReconcile(reconciler, incident)
+		Expect(incident.Status.Phase).To(Equal(praxisv1alpha1.IncidentPhaseAnalyzed))
+		Expect(meta.FindStatusCondition(incident.Status.Conditions, praxisv1alpha1.ConditionAnalysisAccepted)).To(BeNil())
+		before := testutil.ToFloat64(plansTotal.WithLabelValues(PhaseNotCreated, praxisv1alpha1.ReasonCitationInvalid))
+
+		By("the harness annotates the refusal (no plan was ever created)")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: incident.Namespace, Name: incident.Name}, incident)).To(Succeed())
+		incident.Annotations = map[string]string{
+			praxisv1alpha1.AnnotationAnalysisRejected: "CitationInvalid: 1 of 2 citation(s) do not resolve to any item of the 3-item evidence bundle: ev/event-09",
+		}
+		Expect(k8sClient.Update(ctx, incident)).To(Succeed())
+		mustReconcile(reconciler, incident)
+
+		cond := meta.FindStatusCondition(incident.Status.Conditions, praxisv1alpha1.ConditionAnalysisAccepted)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(praxisv1alpha1.ReasonCitationInvalid))
+		Expect(cond.Message).To(ContainSubstring("ev/event-09"))
+		Expect(testutil.ToFloat64(plansTotal.WithLabelValues(PhaseNotCreated, praxisv1alpha1.ReasonCitationInvalid))).To(Equal(before + 1))
+
+		By("re-reconciles neither write status nor count again")
+		counting := &statusWriteCountingClient{Client: k8sClient}
+		countingReconciler := newReconciler(counting)
+		for range 3 {
+			mustReconcile(countingReconciler, incident)
+		}
+		Expect(counting.statusWrites).To(BeZero())
+		Expect(testutil.ToFloat64(plansTotal.WithLabelValues(PhaseNotCreated, praxisv1alpha1.ReasonCitationInvalid))).To(Equal(before + 1))
 	})
 
 	It("names the bundle ConfigMap praxis-ev-<uid8>", func() {

@@ -14,6 +14,16 @@ const (
 	// still running or failing. Failures stay visible here instead of
 	// being hidden behind an optimistic Analyzed phase.
 	ConditionEvidenceCollected = "EvidenceCollected"
+
+	// ConditionAnalysisAccepted records, on the Incident, an analysis the
+	// deterministic guards refused BEFORE any plan was created (ADR-009):
+	// False with reason CitationInvalid when a hypothesis cited evidence
+	// the bundle does not hold, SchemaInvalid when the planner's output
+	// failed the CRD schema twice. The controller sets it from the
+	// praxis.dev/analysis-rejected annotation and counts it once in
+	// praxis_plans_total{phase="NotCreated",reason}. It is never set True:
+	// an accepted analysis is visible as the RemediationPlan it produced.
+	ConditionAnalysisAccepted = "AnalysisAccepted"
 )
 
 // Condition reasons used by the incident evidence machine (Session 3.1).
@@ -94,4 +104,23 @@ const (
 	// changed evidence bundle, a vanished Incident or a wrong annotation
 	// all land here rather than granting anything.
 	ReasonApprovalInvalidated = "ApprovalInvalidated"
+
+	// ReasonCitationsResolved marks a hypothesis whose every citation
+	// names an item of the persisted evidence bundle (Session 3.3; the
+	// real check behind ConditionCitationsResolved).
+	ReasonCitationsResolved = "CitationsResolved"
+
+	// ReasonCitationInvalid rejects a plan — or, on the Incident, an
+	// analysis refused before a plan existed — because a citation does
+	// not resolve in the exact evidence bundle analyzed, or because no
+	// persisted bundle exists to resolve against. This is the structural
+	// hallucination guard of LLD §5 (FR-P3-04): an id that merely looks
+	// like ev/<source>-<seq> is not evidence. Counted in
+	// praxis_plans_total{reason="CitationInvalid"}.
+	ReasonCitationInvalid = "CitationInvalid"
+
+	// ReasonSchemaInvalid marks, on the Incident, a planner output that
+	// failed the CRD-derived schema on the first attempt and again on the
+	// single permitted retry (FR-P3-05); no plan was created.
+	ReasonSchemaInvalid = "SchemaInvalid"
 )

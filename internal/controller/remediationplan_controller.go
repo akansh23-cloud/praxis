@@ -7,10 +7,12 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -23,6 +25,8 @@ import (
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/approve"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
+	"github.com/akansh23-cloud/praxis/internal/hash"
 	"github.com/akansh23-cloud/praxis/internal/validate"
 )
 
@@ -35,9 +39,16 @@ type RemediationPlanReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Citations and Scope are the LLD §5 validation seams. Phase 1 wires
-	// the stubs from internal/validate, whose StubbedInPhase1 reason is
-	// copied verbatim onto the plan's conditions.
+	// APIReader reads the persisted evidence bundle without the manager
+	// cache: one ConfigMap per validation, so informers over every
+	// ConfigMap in the cluster would cost memory for nothing.
+	APIReader client.Reader
+
+	// Citations and Scope are the LLD §5 validation seams. Citations is
+	// real since Session 3.3 (validate.BundleCitationValidator, run over
+	// the bundle loaded from the Incident's evidenceBundleRef); Scope is
+	// still the Phase 1 stub, whose StubbedInPhase1 reason is copied
+	// verbatim onto the plan's conditions until Phase 4.
 	Citations validate.CitationValidator
 	Scope     validate.ScopeChecker
 }
@@ -46,6 +57,7 @@ type RemediationPlanReconciler struct {
 // +kubebuilder:rbac:groups=praxis.dev,resources=remediationplans/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=praxis.dev,resources=remediationplans/finalizers,verbs=update
 // +kubebuilder:rbac:groups=praxis.dev,resources=incidents,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get
 
 // Reconcile advances a RemediationPlan one step through the LLD §4.2 machine.
 // It stays a thin switch: each per-phase handler returns the next phase and
@@ -93,11 +105,15 @@ func (r *RemediationPlanReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	entered := next != before.Phase
 	plan.Status.Phase = next
 	plan.Status.ObservedGeneration = plan.Generation
 	if !apiequality.Semantic.DeepEqual(before, &plan.Status) {
 		if err := r.Status().Update(ctx, plan); err != nil {
 			return ctrl.Result{}, err
+		}
+		if entered {
+			countPlanTransition(plan, next)
 		}
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
@@ -164,7 +180,21 @@ func (r *RemediationPlanReconciler) handleValidating(
 		praxisv1alpha1.ReasonEvidenceHashMatches,
 		"spec.evidenceBundleHash matches the referenced Incident's status.evidenceBundleHash")
 
-	verdict, err := r.Citations.Validate(ctx, plan.Spec.Hypothesis, plan.Spec.EvidenceBundleHash)
+	// Citations resolve against the EXACT bundle the hash names: the
+	// persisted ConfigMap's bytes must hash to it, or the evidence is not
+	// what the plan claims. An Incident without a persisted bundle hands
+	// the validator nil, which it refuses — citations that cannot be
+	// checked are not resolved.
+	bundle, mismatch, err := r.loadBundle(ctx, plan, incident)
+	if err != nil {
+		return plan.Status.Phase, 0, err
+	}
+	if mismatch != "" {
+		setPlanCondition(plan, praxisv1alpha1.ConditionEvidenceValid, metav1.ConditionFalse,
+			praxisv1alpha1.ReasonEvidenceMismatch, mismatch)
+		return praxisv1alpha1.PlanPhaseRejected, 0, nil
+	}
+	verdict, err := r.Citations.Validate(ctx, plan.Spec.Hypothesis, bundle)
 	if err != nil {
 		return plan.Status.Phase, 0, err
 	}
@@ -201,6 +231,41 @@ func (r *RemediationPlanReconciler) handleValidating(
 	setPlanCondition(plan, praxisv1alpha1.ConditionApproved, metav1.ConditionFalse,
 		praxisv1alpha1.ReasonAwaitingApproval, "Plan passed validation and requires human approval before execution")
 	return praxisv1alpha1.PlanPhaseAwaitingApproval, 0, nil
+}
+
+// loadBundle fetches the evidence bundle the Incident's status names and
+// checks its bytes hash to the plan's cited hash. It returns (bundle, "",
+// nil) on success, (nil, "", nil) when the Incident has no persisted
+// bundle, (nil, reason, nil) when the named bundle is missing, unreadable
+// or hashes to something else — a verdict, not machinery trouble — and an
+// error only for retryable API failures.
+func (r *RemediationPlanReconciler) loadBundle(
+	ctx context.Context, plan *praxisv1alpha1.RemediationPlan, incident *praxisv1alpha1.Incident,
+) (*evidence.Bundle, string, error) {
+	ref := incident.Status.EvidenceBundleRef
+	if ref == "" {
+		return nil, "", nil
+	}
+	cm := &corev1.ConfigMap{}
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: plan.Namespace, Name: ref}, cm)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, fmt.Sprintf("Incident %q names evidence bundle ConfigMap %q, which does not exist", incident.Name, ref), nil
+	case err != nil:
+		return nil, "", err
+	}
+	raw, ok := cm.Data[evidence.BundleConfigMapKey]
+	if !ok {
+		return nil, fmt.Sprintf("Evidence bundle ConfigMap %q has no %s key", ref, evidence.BundleConfigMapKey), nil
+	}
+	if got := hash.SHA256Prefixed([]byte(raw)); got != plan.Spec.EvidenceBundleHash {
+		return nil, fmt.Sprintf("Evidence bundle ConfigMap %q hashes to %s, not the cited %s", ref, got, plan.Spec.EvidenceBundleHash), nil
+	}
+	bundle := &evidence.Bundle{}
+	if err := json.Unmarshal([]byte(raw), bundle); err != nil {
+		return nil, fmt.Sprintf("Evidence bundle ConfigMap %q is not a parseable bundle: %v", ref, err), nil
+	}
+	return bundle, "", nil
 }
 
 // handleAwaitingApproval verifies the Phase 1 approval mechanism. The human
@@ -326,18 +391,18 @@ func isTerminalPlanPhase(phase praxisv1alpha1.PlanPhase) bool {
 }
 
 // describeHash renders a possibly-unset hash for condition messages.
-func describeHash(hash string) string {
-	if hash == "" {
+func describeHash(h string) string {
+	if h == "" {
 		return "no evidence bundle hash yet"
 	}
-	return hash
+	return h
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RemediationPlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.Citations == nil || r.Scope == nil {
-		return errors.New("RemediationPlanReconciler needs a CitationValidator and a ScopeChecker; " +
-			"wire the Phase 1 stubs from internal/validate")
+	if r.Citations == nil || r.Scope == nil || r.APIReader == nil {
+		return errors.New("RemediationPlanReconciler needs an APIReader, a CitationValidator and a ScopeChecker; " +
+			"wire validate.BundleCitationValidator and the Phase 1 scope stub from internal/validate")
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&praxisv1alpha1.RemediationPlan{}).

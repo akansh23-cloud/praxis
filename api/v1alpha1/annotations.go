@@ -35,6 +35,31 @@ const (
 	AnnotationNoActionProposed = "praxis.dev/no-action-proposed"
 )
 
+// The analysis audit trail (LLD §15; playbook Session 3.3).
+const (
+	// AnnotationAnalysisRejected on an Incident records an analysis the
+	// deterministic guards refused before any RemediationPlan was created
+	// (ADR-009). The value is "<Reason>: <detail>" where Reason is
+	// CitationInvalid (a hypothesis cited evidence the bundle does not
+	// hold) or SchemaInvalid (the planner's output failed the CRD schema
+	// twice). Written by whatever drives an Agent (the benchmark harness
+	// today, the analyzer from Phase 5); the controller mirrors it into
+	// ConditionAnalysisAccepted and the praxis_plans_total metric.
+	AnnotationAnalysisRejected = "praxis.dev/analysis-rejected"
+
+	// AnnotationPromptHash on a RemediationPlan is sha256 over the
+	// canonical JSON of the exact prompt the plan was produced from —
+	// provider, model, system instructions, user message and output
+	// schema — so an audit can tell two plans from the same model and
+	// bundle apart, without the prompt itself (which contains bundle
+	// data) ever being stored on the object.
+	AnnotationPromptHash = "praxis.dev/prompt-hash"
+
+	// AnnotationModel on a RemediationPlan names the provider and model
+	// that produced it, as "<provider>/<model>".
+	AnnotationModel = "praxis.dev/model"
+)
+
 // Recent-change context (LLD §6 GitCommit evidence). Until the real Git
 // integration lands in Phase 6, the deployed-change trail lives in workload
 // annotations stamped by whatever applied the change — the bench fault packs

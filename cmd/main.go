@@ -229,12 +229,14 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.RemediationPlanReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		// Phase 1 wires the honest stubs: they pass with reason
-		// StubbedInPhase1, visible on the plan's conditions. Real
-		// implementations land in Phases 3 (citations) and 4 (scope).
-		Citations: validate.StubCitationValidator{},
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		// Citations are real since Session 3.3: every cited id must name
+		// an item of the persisted bundle the plan's hash covers. Scope
+		// stays the honest Phase 1 stub (reason StubbedInPhase1, visible
+		// on the plan's conditions) until the simulator lands in Phase 4.
+		Citations: validate.BundleCitationValidator{},
 		Scope:     validate.StubScopeChecker{},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "remediationplan")

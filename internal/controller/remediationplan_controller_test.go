@@ -12,14 +12,18 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	praxisv1alpha1 "github.com/akansh23-cloud/praxis/api/v1alpha1"
 	"github.com/akansh23-cloud/praxis/internal/approve"
+	"github.com/akansh23-cloud/praxis/internal/evidence"
 	"github.com/akansh23-cloud/praxis/internal/validate"
 )
 
@@ -32,14 +36,42 @@ var _ = Describe("RemediationPlan phase machine", func() {
 
 	ctx := context.Background()
 
-	BeforeEach(func() {
-		reconciler = &RemediationPlanReconciler{
-			Client:    k8sClient,
+	newReconciler := func(c client.Client) *RemediationPlanReconciler {
+		return &RemediationPlanReconciler{
+			Client:    c,
 			Scheme:    k8sClient.Scheme(),
-			Citations: validate.StubCitationValidator{},
+			APIReader: k8sClient,
+			Citations: validate.BundleCitationValidator{},
 			Scope:     validate.StubScopeChecker{},
 		}
+	}
+
+	BeforeEach(func() {
+		reconciler = newReconciler(k8sClient)
 	})
+
+	// persistFixtureBundle stores the deterministic fixture bundle for the
+	// incident the way the collector would — ConfigMap first, then ref and
+	// hash through the status subresource — and returns the hash a plan
+	// must cite. Citations of fixtureCitation then resolve; nothing else.
+	persistFixtureBundle := func(incident *praxisv1alpha1.Incident) string {
+		GinkgoHelper()
+		raw, bundleHash, err := fixtureBundle(incident)
+		Expect(err).NotTo(HaveOccurred())
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: evidence.BundleConfigMapName(incident.UID), Namespace: incident.Namespace},
+			Data:       map[string]string{evidence.BundleConfigMapKey: string(raw)},
+		}
+		Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+		incident.Status.EvidenceBundleRef = cm.Name
+		incident.Status.EvidenceBundleHash = bundleHash
+		Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
+		return bundleHash
+	}
+
+	plansCounted := func(phase, reason string) float64 {
+		return testutil.ToFloat64(plansTotal.WithLabelValues(phase, reason))
+	}
 
 	// reconcilePlan runs one Reconcile for the plan and refreshes it.
 	reconcilePlan := func(r *RemediationPlanReconciler, plan *praxisv1alpha1.RemediationPlan) ctrl.Result {
@@ -78,10 +110,10 @@ var _ = Describe("RemediationPlan phase machine", func() {
 		It("walks Pending → Validating → AwaitingApproval with correct conditions at each step", func() {
 			incident := newTestIncident(uniqueName("walk-inc"))
 			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
-			incident.Status.EvidenceBundleHash = evidenceHash
-			Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
+			bundleHash := persistFixtureBundle(incident)
+			awaitingBefore := plansCounted(string(praxisv1alpha1.PlanPhaseAwaitingApproval), praxisv1alpha1.ReasonAwaitingApproval)
 
-			plan := newTestPlan(uniqueName("walk-plan"), incident.Name, evidenceHash)
+			plan := newTestPlan(uniqueName("walk-plan"), incident.Name, bundleHash)
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 
 			By("step 1: pickup — the new plan becomes Pending")
@@ -108,16 +140,18 @@ var _ = Describe("RemediationPlan phase machine", func() {
 			expectCondition(plan, praxisv1alpha1.ConditionEvidenceValid,
 				metav1.ConditionTrue, praxisv1alpha1.ReasonEvidenceHashMatches)
 			expectCondition(plan, praxisv1alpha1.ConditionCitationsResolved,
-				metav1.ConditionTrue, validate.ReasonStubbedInPhase1)
+				metav1.ConditionTrue, praxisv1alpha1.ReasonCitationsResolved)
 			expectCondition(plan, praxisv1alpha1.ConditionScopeValid,
 				metav1.ConditionTrue, validate.ReasonStubbedInPhase1)
 			expectCondition(plan, praxisv1alpha1.ConditionApproved,
 				metav1.ConditionFalse, praxisv1alpha1.ReasonAwaitingApproval)
+			Expect(plansCounted(string(praxisv1alpha1.PlanPhaseAwaitingApproval), praxisv1alpha1.ReasonAwaitingApproval)).
+				To(Equal(awaitingBefore+1), "praxis_plans_total counts the AwaitingApproval entry")
 
 			By("recording that approval is required and bound to the exact plan + evidence (LLD §8)")
 			Expect(plan.Status.Approval).NotTo(BeNil())
 			Expect(plan.Status.Approval.Required).To(BeTrue())
-			expectedBoundTo, err := approve.BoundTo(evidenceHash, &plan.Spec)
+			expectedBoundTo, err := approve.BoundTo(bundleHash, &plan.Spec)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(plan.Status.Approval.BoundTo).To(Equal(expectedBoundTo))
 			Expect(plan.Status.Approval.ApprovedBy).To(BeEmpty())
@@ -175,24 +209,97 @@ var _ = Describe("RemediationPlan phase machine", func() {
 		}),
 	)
 
+	Describe("citation validation (Session 3.3, the structural hallucination guard)", func() {
+		It("rejects a plan whose citation names no item of the persisted bundle, counted as CitationInvalid", func() {
+			incident := newTestIncident(uniqueName("cite-inc"))
+			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
+			bundleHash := persistFixtureBundle(incident)
+			rejectedBefore := plansCounted(string(praxisv1alpha1.PlanPhaseRejected), praxisv1alpha1.ReasonCitationInvalid)
+
+			plan := newTestPlan(uniqueName("cite-plan"), incident.Name, bundleHash)
+			// A well-shaped id the bundle does not hold: shape is not evidence.
+			plan.Spec.Hypothesis.Citations = []praxisv1alpha1.EvidenceID{fixtureCitation, "ev/event-09"}
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+			walkToSettled(reconciler, plan)
+
+			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseRejected))
+			expectCondition(plan, praxisv1alpha1.ConditionEvidenceValid,
+				metav1.ConditionTrue, praxisv1alpha1.ReasonEvidenceHashMatches)
+			expectCondition(plan, praxisv1alpha1.ConditionCitationsResolved,
+				metav1.ConditionFalse, praxisv1alpha1.ReasonCitationInvalid)
+			Expect(meta.FindStatusCondition(plan.Status.Conditions, praxisv1alpha1.ConditionCitationsResolved).Message).
+				To(ContainSubstring("ev/event-09"))
+			// Cheapest-first: scope never ran, no approval is owed.
+			expectCondition(plan, praxisv1alpha1.ConditionScopeValid,
+				metav1.ConditionUnknown, praxisv1alpha1.ReasonNotYetEvaluated)
+			Expect(plan.Status.Approval).To(BeNil())
+			Expect(plansCounted(string(praxisv1alpha1.PlanPhaseRejected), praxisv1alpha1.ReasonCitationInvalid)).
+				To(Equal(rejectedBefore+1), "praxis_plans_total{phase=Rejected,reason=CitationInvalid} counts it")
+
+			By("a terminal rejection is settled: re-reconciles write nothing and count nothing")
+			counting := &statusWriteCountingClient{Client: k8sClient}
+			for range 3 {
+				reconcilePlan(newReconciler(counting), plan)
+			}
+			Expect(counting.statusWrites).To(BeZero())
+			Expect(plansCounted(string(praxisv1alpha1.PlanPhaseRejected), praxisv1alpha1.ReasonCitationInvalid)).
+				To(Equal(rejectedBefore + 1))
+		})
+
+		It("rejects a plan when the Incident carries a hash but no persisted bundle", func() {
+			incident := newTestIncident(uniqueName("nobundle-inc"))
+			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
+			incident.Status.EvidenceBundleHash = evidenceHash
+			Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
+
+			plan := newTestPlan(uniqueName("nobundle-plan"), incident.Name, evidenceHash)
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+			walkToSettled(reconciler, plan)
+
+			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseRejected))
+			expectCondition(plan, praxisv1alpha1.ConditionCitationsResolved,
+				metav1.ConditionFalse, praxisv1alpha1.ReasonCitationInvalid)
+			Expect(meta.FindStatusCondition(plan.Status.Conditions, praxisv1alpha1.ConditionCitationsResolved).Message).
+				To(ContainSubstring("No persisted evidence bundle"))
+		})
+
+		It("rejects a plan whose named bundle does not hash to the cited value", func() {
+			incident := newTestIncident(uniqueName("tamper-inc"))
+			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
+			bundleHash := persistFixtureBundle(incident)
+
+			// The stored bytes change after the hash was recorded.
+			cm := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: incident.Namespace, Name: incident.Status.EvidenceBundleRef}, cm)).To(Succeed())
+			cm.Data[evidence.BundleConfigMapKey] = `{"items":[],"version":"1"}`
+			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
+
+			plan := newTestPlan(uniqueName("tamper-plan"), incident.Name, bundleHash)
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+			walkToSettled(reconciler, plan)
+
+			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseRejected))
+			expectCondition(plan, praxisv1alpha1.ConditionEvidenceValid,
+				metav1.ConditionFalse, praxisv1alpha1.ReasonEvidenceMismatch)
+			Expect(meta.FindStatusCondition(plan.Status.Conditions, praxisv1alpha1.ConditionEvidenceValid).Message).
+				To(ContainSubstring("hashes to"))
+			expectCondition(plan, praxisv1alpha1.ConditionCitationsResolved,
+				metav1.ConditionUnknown, praxisv1alpha1.ReasonNotYetEvaluated)
+		})
+	})
+
 	Describe("idempotency", func() {
 		It("re-reconciling a settled AwaitingApproval plan performs zero status writes", func() {
 			incident := newTestIncident(uniqueName("settled-inc"))
 			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
-			incident.Status.EvidenceBundleHash = evidenceHash
-			Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
-			plan := newTestPlan(uniqueName("settled-plan"), incident.Name, evidenceHash)
+			bundleHash := persistFixtureBundle(incident)
+			plan := newTestPlan(uniqueName("settled-plan"), incident.Name, bundleHash)
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 			walkToSettled(reconciler, plan)
 			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseAwaitingApproval))
 
 			counting := &statusWriteCountingClient{Client: k8sClient}
-			countingReconciler := &RemediationPlanReconciler{
-				Client:    counting,
-				Scheme:    k8sClient.Scheme(),
-				Citations: validate.StubCitationValidator{},
-				Scope:     validate.StubScopeChecker{},
-			}
+			countingReconciler := newReconciler(counting)
 			versionBefore := plan.ResourceVersion
 			statusBefore := plan.Status.DeepCopy()
 			for range 3 {
@@ -211,12 +318,7 @@ var _ = Describe("RemediationPlan phase machine", func() {
 			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseRejected))
 
 			counting := &statusWriteCountingClient{Client: k8sClient}
-			countingReconciler := &RemediationPlanReconciler{
-				Client:    counting,
-				Scheme:    k8sClient.Scheme(),
-				Citations: validate.StubCitationValidator{},
-				Scope:     validate.StubScopeChecker{},
-			}
+			countingReconciler := newReconciler(counting)
 			versionBefore := plan.ResourceVersion
 			for range 3 {
 				result := reconcilePlan(countingReconciler, plan)
@@ -234,9 +336,8 @@ var _ = Describe("RemediationPlan phase machine", func() {
 			GinkgoHelper()
 			incident := newTestIncident(uniqueName(prefix + "-inc"))
 			Expect(k8sClient.Create(ctx, incident)).To(Succeed())
-			incident.Status.EvidenceBundleHash = evidenceHash
-			Expect(k8sClient.Status().Update(ctx, incident)).To(Succeed())
-			plan := newTestPlan(uniqueName(prefix+"-plan"), incident.Name, evidenceHash)
+			bundleHash := persistFixtureBundle(incident)
+			plan := newTestPlan(uniqueName(prefix+"-plan"), incident.Name, bundleHash)
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 			walkToSettled(reconciler, plan)
 			Expect(plan.Status.Phase).To(Equal(praxisv1alpha1.PlanPhaseAwaitingApproval))
@@ -289,12 +390,7 @@ var _ = Describe("RemediationPlan phase machine", func() {
 			Expect(plan.Status.Approval.ApprovedBy).To(BeEmpty())
 
 			counting := &statusWriteCountingClient{Client: k8sClient}
-			countingReconciler := &RemediationPlanReconciler{
-				Client:    counting,
-				Scheme:    k8sClient.Scheme(),
-				Citations: validate.StubCitationValidator{},
-				Scope:     validate.StubScopeChecker{},
-			}
+			countingReconciler := newReconciler(counting)
 			versionBefore := plan.ResourceVersion
 			statusBefore := plan.Status.DeepCopy()
 			for range 3 {

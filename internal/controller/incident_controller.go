@@ -78,11 +78,17 @@ func (r *IncidentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	before := incident.Status.DeepCopy()
 	advanceErr := r.advance(ctx, incident)
+	// A refused analysis is counted only once its condition is persisted,
+	// so a conflicting status write cannot count it twice.
+	rejectedReason := r.mirrorAnalysisRejection(incident)
 
 	incident.Status.ObservedGeneration = incident.Generation
 	if !apiequality.Semantic.DeepEqual(before, &incident.Status) {
 		if err := r.Status().Update(ctx, incident); err != nil {
 			return ctrl.Result{}, err
+		}
+		if rejectedReason != "" {
+			plansTotal.WithLabelValues(PhaseNotCreated, rejectedReason).Inc()
 		}
 	}
 	return ctrl.Result{}, advanceErr
@@ -141,6 +147,43 @@ func (r *IncidentReconciler) advance(ctx context.Context, incident *praxisv1alph
 
 	incident.Status.Phase = phase
 	return nil
+}
+
+// mirrorAnalysisRejection turns the praxis.dev/analysis-rejected
+// annotation — written by whatever drove an Agent when the deterministic
+// guards refused its analysis before any plan existed (ADR-009) — into
+// the AnalysisAccepted=False condition, and returns the reason to count
+// under praxis_plans_total{phase="NotCreated"} when the condition
+// changed. SetStatusCondition reports whether anything changed, so a
+// settled annotation is counted exactly once and re-reconciles stay free
+// of status writes.
+func (r *IncidentReconciler) mirrorAnalysisRejection(incident *praxisv1alpha1.Incident) string {
+	value, ok := incident.Annotations[praxisv1alpha1.AnnotationAnalysisRejected]
+	if !ok || value == "" {
+		return ""
+	}
+	reason := "AnalysisRejected"
+	if prefix, _, found := strings.Cut(value, ":"); found {
+		switch strings.TrimSpace(prefix) {
+		case praxisv1alpha1.ReasonCitationInvalid, praxisv1alpha1.ReasonSchemaInvalid:
+			reason = strings.TrimSpace(prefix)
+		}
+	}
+	message := value
+	if len(message) > 1024 {
+		message = message[:1024] + "…"
+	}
+	changed := meta.SetStatusCondition(&incident.Status.Conditions, metav1.Condition{
+		Type:               praxisv1alpha1.ConditionAnalysisAccepted,
+		Status:             metav1.ConditionFalse,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: incident.Generation,
+	})
+	if !changed {
+		return ""
+	}
+	return reason
 }
 
 // acceptPresuppliedHash honours an evidenceBundleHash that was already on
