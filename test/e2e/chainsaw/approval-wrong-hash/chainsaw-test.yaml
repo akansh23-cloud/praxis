@@ -16,9 +16,11 @@ spec:
             file: incident.yaml
         - script:
             content: |
+              set -e
+              kubectl -n "$NAMESPACE" create configmap wrong-hash-bundle --from-file=bundle.json=bundle.json
               kubectl -n "$NAMESPACE" patch incident wrong-hash-incident \
                 --subresource=status --type=merge \
-                -p '{"status":{"evidenceBundleHash":"sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f"}}'
+                -p '{"status":{"evidenceBundleRef":"wrong-hash-bundle","evidenceBundleHash":"sha256:2f93413dc9e4a210dfff2f65f8c6d35dad6d2ab64c2f9977b0123e2b2845ef60"}}'
         - apply:
             file: plan.yaml
         - assert:

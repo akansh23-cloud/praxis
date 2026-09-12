@@ -1,7 +1,11 @@
-# The Phase 1 happy path, end to end on a real cluster: an Incident gains an
-# evidence hash, a plan citing that hash walks Pending → Validating →
-# AwaitingApproval, and a human's annotation carrying the exact binding hash
-# flips Approved to True while the phase parks awaiting the Phase 5 executor.
+# The happy path, end to end on a real cluster: an Incident carries a
+# persisted evidence bundle (the fixture bundle.json, rendered by the real
+# assembler, and its hash), a plan citing that hash AND an id the bundle
+# holds walks Pending → Validating → AwaitingApproval, and a human's
+# annotation carrying the exact binding hash flips Approved to True while
+# the phase parks awaiting the Phase 5 executor. Since Session 3.3 the
+# citation check is real: the bundle must exist, hash to the cited value,
+# and hold every cited id.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -11,17 +15,21 @@ spec:
     Incident → status hash → plan → AwaitingApproval → hash-bound annotation
     approval → Approved=True.
   steps:
-    - name: incident-with-evidence-hash
+    - name: incident-with-persisted-evidence
       try:
         - apply:
             file: incident.yaml
-        # Status is writable only through the status subresource — the same
-        # channel the Phase 3 evidence collector will use.
+        # The bundle is persisted the way the collector persists one — a
+        # ConfigMap holding the canonical bytes under bundle.json — and
+        # status names it through the status subresource, the collector's
+        # own channel. The hash below is sha256 over exactly those bytes.
         - script:
             content: |
+              set -e
+              kubectl -n "$NAMESPACE" create configmap walk-bundle --from-file=bundle.json=bundle.json
               kubectl -n "$NAMESPACE" patch incident walk-incident \
                 --subresource=status --type=merge \
-                -p '{"status":{"evidenceBundleHash":"sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f"}}'
+                -p '{"status":{"evidenceBundleRef":"walk-bundle","evidenceBundleHash":"sha256:2f93413dc9e4a210dfff2f65f8c6d35dad6d2ab64c2f9977b0123e2b2845ef60"}}'
     - name: plan-reaches-awaiting-approval
       try:
         - apply:

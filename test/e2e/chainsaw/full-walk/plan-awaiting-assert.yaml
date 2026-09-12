@@ -16,7 +16,7 @@ status:
       reason: EvidenceHashMatches
   (conditions[?type == 'CitationsResolved']):
     - status: "True"
-      reason: StubbedInPhase1
+      reason: CitationsResolved
   (conditions[?type == 'ScopeValid']):
     - status: "True"
       reason: StubbedInPhase1

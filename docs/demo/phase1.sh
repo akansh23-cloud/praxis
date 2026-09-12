@@ -2,8 +2,10 @@
 # Praxis Phase 1 demo — the lifecycle walk and the structural rejections.
 #
 # What it shows, in order:
-#   1. Incident → evidence hash → RemediationPlan → AwaitingApproval,
-#      with every condition visible;
+#   1. Incident → a REAL evidence bundle (collected by the manager since
+#      Session 3.1, hash on status) → RemediationPlan citing it →
+#      AwaitingApproval, with every condition visible — including the real
+#      citation check of Session 3.3;
 #   2. the hash-bound annotation approval round-trip;
 #   3. structural rejection: editing an admitted plan's spec is refused
 #      by the API server (CEL transition rule);
@@ -11,7 +13,9 @@
 #      is refused at admission and never persisted.
 #
 # Prerequisites: a cluster (make kind-up), CRDs (make install), and a
-# running manager (make dev in another terminal). Run from the repo root.
+# running manager (make dev in another terminal) — the evidence is
+# collected for real from config/samples/demo_workload.yaml. Run from the
+# repo root.
 # The script resets its own objects first, so it runs clean repeatedly.
 #
 # Recording: `make demo-record` wraps this script with asciinema.
@@ -56,25 +60,29 @@ kubectl get crd remediationplans.praxis.dev >/dev/null 2>&1 || {
   exit 1
 }
 
-# The hash the sample plan cites, read from the sample itself so the demo
-# and the fixture can never drift apart.
-HASH=$(awk '/evidenceBundleHash:/ {print $2}' config/samples/praxis_v1alpha1_remediationplan.yaml)
-
 echo "(resetting any previous demo state)"
 kubectl delete remediationplan "$PLAN" --ignore-not-found --wait >/dev/null
 kubectl delete incident "$INCIDENT" --ignore-not-found --wait >/dev/null
 
 say "PRAXIS PHASE 1 — the lifecycle, and what it refuses to do"
 
+say "The workload the evidence will be collected from (an annotated checkout-api in namespace shop):"
+run kubectl apply -f config/samples/demo_workload.yaml
+
 say "An incident fired. It declares WHERE remediation may act (spec.scope):"
 run kubectl apply -f config/samples/praxis_v1alpha1_incident.yaml
 
-say "Evidence gets collected and fingerprinted (hand-set until Phase 3 — status subresource only):"
-run kubectl patch incident "$INCIDENT" --subresource=status --type=merge \
-  -p "{\"status\":{\"evidenceBundleHash\":\"$HASH\"}}"
+say "The manager collects a real, bounded, redacted evidence bundle and fingerprints it (Detected → Collecting → Analyzed):"
+if ! kubectl wait --for=jsonpath='{.status.phase}'=Analyzed "incident/$INCIDENT" --timeout=120s; then
+  echo "The incident never reached Analyzed — is the manager running? (make dev)" >&2
+  exit 1
+fi
+HASH=$(kubectl get incident "$INCIDENT" -o jsonpath='{.status.evidenceBundleHash}')
+run kubectl get incident "$INCIDENT" -o jsonpath='{.status.evidenceBundleRef}{"  "}{.status.evidenceBundleHash}{"\n"}'
 
-say "A remediation plan citing exactly that evidence:"
-run kubectl apply -f config/samples/praxis_v1alpha1_remediationplan.yaml
+say "A remediation plan citing exactly that evidence — its citations must resolve in the bundle, or the controller rejects it:"
+sed -E "s|^(  evidenceBundleHash:).*|\1 $HASH|" config/samples/praxis_v1alpha1_remediationplan.yaml \
+  | run kubectl apply -f -
 
 say "The controller walks it Pending → Validating → AwaitingApproval:"
 if ! kubectl wait --for=jsonpath='{.status.phase}'=AwaitingApproval \

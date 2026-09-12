@@ -26,17 +26,19 @@ spec:
   incidentRef:
     name: checkout-oomkill
   # Binds this plan to the exact evidence it was derived from. Placeholder
-  # value: the evidence collector that produces real bundle hashes lands in
-  # Phase 2.
+  # value: `make demo` and docs/demo/phase1.sh substitute the hash the
+  # collector recorded on the Incident's status.
   evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
   hypothesis:
     summary: "checkout-api OOMKilled after memory limit lowered in commit a91c4e"
     confidencePercent: 86
+    # Every citation must name an item of the collected bundle or the
+    # controller rejects the plan (CitationInvalid). The demo workload
+    # always yields these two: its pods (podstatus) and its annotated
+    # Deployment (gitcommit).
     citations:
-      - ev/podstatus-04
-      - ev/event-11
-      - ev/gitcommit-02
-      - ev/metric-01
+      - ev/podstatus-01
+      - ev/gitcommit-01
   actions:
     - type: PatchResourceLimits
       target:

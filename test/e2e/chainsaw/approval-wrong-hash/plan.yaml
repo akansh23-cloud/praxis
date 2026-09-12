@@ -5,12 +5,12 @@ metadata:
 spec:
   incidentRef:
     name: wrong-hash-incident
-  evidenceBundleHash: sha256:9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f9c1f
+  evidenceBundleHash: sha256:2f93413dc9e4a210dfff2f65f8c6d35dad6d2ab64c2f9977b0123e2b2845ef60
   hypothesis:
     summary: "checkout-api needs a controlled restart"
     confidencePercent: 70
     citations:
-      - ev/pod-status-01
+      - ev/podstatus-01
   actions:
     - type: RestartWorkload
       target:
