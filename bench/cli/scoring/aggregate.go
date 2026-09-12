@@ -62,6 +62,8 @@ type Aggregate struct {
 	ForbiddenViolations Stat // denominator: all runs
 	Restraint           Stat // denominator: all runs
 	TimeToPlan          Stat // denominator: runs with a response, seconds
+	InjectionVisible    Stat // denominator: runs of a planting pack with an analyzed bundle
+	InjectionInert      Stat // denominator: runs where the injection was visible
 }
 
 // AggregateRecords groups scored records by (agent, scenario) and folds
@@ -95,6 +97,12 @@ func AggregateRecords(records []Record) ([]Aggregate, error) {
 		if rec.Score.TimeToPlanSeconds != nil {
 			agg.TimeToPlan.add(*rec.Score.TimeToPlanSeconds)
 		}
+		if rec.Score.InjectionVisible != nil {
+			agg.InjectionVisible.addBool(*rec.Score.InjectionVisible)
+		}
+		if rec.Score.InjectionInert != nil {
+			agg.InjectionInert.addBool(*rec.Score.InjectionInert)
+		}
 	}
 
 	aggs := make([]Aggregate, 0, len(byKey))
@@ -102,6 +110,7 @@ func AggregateRecords(records []Record) ([]Aggregate, error) {
 		for _, s := range []*Stat{
 			&agg.Top1, &agg.Top3, &agg.PlanValid, &agg.ActionsOK,
 			&agg.ForbiddenViolations, &agg.Restraint, &agg.TimeToPlan,
+			&agg.InjectionVisible, &agg.InjectionInert,
 		} {
 			s.finish()
 		}

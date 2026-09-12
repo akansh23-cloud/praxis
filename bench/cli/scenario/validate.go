@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -167,6 +168,7 @@ func (s *Scenario) validateGroundTruth(p *problems) {
 
 	validateDiagnosis(p, &gt.Diagnosis)
 	validatePredicates(p, gt)
+	s.validatePlantedTelemetry(p)
 
 	validateActionRefs(p, "groundTruth.acceptableActions", gt.AcceptableActions)
 	validateActionRefs(p, "groundTruth.forbiddenActions", gt.ForbiddenActions)
@@ -253,6 +255,62 @@ func validatePredicates(p *problems, gt *GroundTruth) {
 	if strings.TrimSpace(gt.HarmPredicate) == "" {
 		p.addf("groundTruth.harmPredicate",
 			"required — the PromQL declaring what \"harmed\" means for this scenario (evaluated from Phase 5; ADR-005)")
+	}
+}
+
+// maxPlantBytes bounds one planted telemetry string. The Loki collector
+// normalizes a line to at most 1 KiB before templating
+// (internal/evidence/logs.MaxLineBytes), so a longer plant could never
+// appear verbatim in a bundle and the visibility metric would be false
+// by construction.
+const maxPlantBytes = 1024
+
+// validatePlantedTelemetry enforces that every planted string can be
+// checked exactly as authored (ADR-010): non-blank, no surrounding
+// whitespace or control characters (the collector trims and strips them,
+// so such a plant could never match), bounded, unique, present verbatim
+// in the fault payload that writes it (ground truth and fault cannot
+// drift apart), and free of benchmark identity — a plant naming the
+// scenario, its rootCauseId or the answer-key marker would trip the
+// runner's live scenario-blind guard on every run.
+func (s *Scenario) validatePlantedTelemetry(p *problems) {
+	plants := s.GroundTruth.PlantedTelemetry
+	if len(plants) == 0 {
+		return
+	}
+	var fault []byte
+	if path := s.FaultPath(); s.Fault.Ref != "" && !filepath.IsAbs(s.Fault.Ref) {
+		// A missing payload is already reported by validateFault; the
+		// verbatim check below then simply cannot succeed.
+		fault, _ = os.ReadFile(path)
+	}
+	seen := map[string]bool{}
+	for i, plant := range plants {
+		field := fmt.Sprintf("groundTruth.plantedTelemetry[%d]", i)
+		switch {
+		case strings.TrimSpace(plant) == "":
+			p.addf(field, "is blank; a planted string must be text the fault writes into telemetry (ADR-010)")
+			continue
+		case strings.TrimSpace(plant) != plant:
+			p.addf(field, "has leading or trailing whitespace; the collector trims lines, so it could never match verbatim")
+		case len(plant) > maxPlantBytes:
+			p.addf(field, "is %d bytes; the collector cuts lines at %d bytes, so it could never appear verbatim", len(plant), maxPlantBytes)
+		case strings.ContainsFunc(plant, unicode.IsControl):
+			p.addf(field, "contains a control character; the collector strips them, so it could never match verbatim")
+		}
+		lower := strings.ToLower(plant)
+		for _, identity := range []string{strings.ToLower(s.Name), strings.ToLower(s.GroundTruth.RootCauseID), "groundtruth"} {
+			if identity != "" && strings.Contains(lower, identity) {
+				p.addf(field, "contains benchmark identity %q; a plant is telemetry the agent sees, and the runner refuses inputs carrying the scenario name, rootCauseId or answer-key marker", identity)
+			}
+		}
+		if seen[plant] {
+			p.addf(field, "duplicate planted string")
+		}
+		seen[plant] = true
+		if fault != nil && !strings.Contains(string(fault), plant) {
+			p.addf(field, "does not appear verbatim in the fault payload %s; the ground truth must name exactly what the fault writes", s.Fault.Ref)
+		}
 	}
 }
 

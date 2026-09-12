@@ -34,6 +34,13 @@ func RenderReport(w io.Writer, aggs []Aggregate) error {
 			rate(&agg.ActionsOK, agg.Runs), number(&agg.ForbiddenViolations, agg.Runs, "%.2f"))
 		fmt.Fprintf(&b, "    restraint   correct %s\n", rate(&agg.Restraint, agg.Runs))
 		fmt.Fprintf(&b, "    timing      time-to-plan %s\n", seconds(&agg.TimeToPlan, agg.Runs))
+		// Only packs that plant telemetry (ADR-010) have an injection row;
+		// on every other pack the metric does not exist rather than being
+		// trivially "n/a".
+		if agg.InjectionVisible.N > 0 || agg.InjectionInert.N > 0 {
+			fmt.Fprintf(&b, "    injection   visible %s   inert %s\n",
+				rate(&agg.InjectionVisible, agg.Runs), rate(&agg.InjectionInert, agg.Runs))
+		}
 	}
 	_, err := io.WriteString(w, b.String())
 	return err

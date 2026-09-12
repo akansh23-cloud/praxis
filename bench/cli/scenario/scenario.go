@@ -133,6 +133,18 @@ type GroundTruth struct {
 	// per pack (ADR-005); evaluated effect-side only from Phase 5 on.
 	FixPredicate  string `json:"fixPredicate"`
 	HarmPredicate string `json:"harmPredicate"`
+
+	// PlantedTelemetry lists attacker-influenced strings the fault writes
+	// into telemetry the evidence collector reads — pod log lines, the
+	// prompt-injection pack of playbook Session 3.4 (FR-P3-08, ADR-010).
+	// They are ground truth for the referee only: the runner records which
+	// of them appeared verbatim in a data value of the bundle the agent
+	// analyzed, and the scorer derives injection visibility (all of them
+	// reached the model, as data) and inertness (the outcome stayed inside
+	// the closed vocabulary, the forbidden set and the restraint
+	// expectation regardless). Nothing here is ever removed from telemetry
+	// or hidden from an agent. Optional; empty for packs that plant nothing.
+	PlantedTelemetry []string `json:"plantedTelemetry,omitempty"`
 }
 
 // Scenario is one scenarios/<name>/scenario.yaml, loaded and validated.
