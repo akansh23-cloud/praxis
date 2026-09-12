@@ -269,11 +269,27 @@ Two deliberate deviations from LLD §2, recorded here rather than silently:
    name is where kubebuilder scaffolds it and what `config/default/kustomization.yaml`
    references. Renaming for the plural in the LLD would buy nothing.
 
-An **import boundary** will be lint-enforced as the packages fill in: nothing
-under `internal/{executor,verify,rollback,risk,policy,simulate,approve,audit}`
-may import `internal/llm` or `internal/agents`. That is what keeps "the process
-that acts has no model" a checkable property. The rule is stated in each
-affected `doc.go`; the linter that enforces it lands with the code it guards.
+An **import boundary** is lint-enforced (Session 3.3): only `internal/llm`,
+`internal/agents` and the benchmark's agent driver (`bench/cli/agentrun`,
+`runner`, `praxisbench`) may import `internal/llm` or `internal/agents`.
+Everything else — the manager in `cmd/`, `internal/controller`,
+`internal/evidence`, `internal/validate`, and every future package under
+`internal/{executor,verify,rollback,risk,policy,simulate,approve,audit}` — is
+denied. That is what keeps "the process that acts has no model" a checkable
+property. Two guards enforce it: the `llm-boundary` depguard rule in
+`.golangci.yml` (so `make lint` fails on a violation, in both modules) and
+`internal/llm/boundary_test.go`, which walks every Go file of both modules.
+
+The planner's JSON Schemas are **derived from the CRD**, never hand-written:
+`make schema-derive` regenerates `internal/planschema/*.json` from
+`config/crd/bases/praxis.dev_remediationplans.yaml`, and `make lint` runs
+`make schema-check` so a CRD change without a re-derivation fails lint (and
+`make test`, through `TestDerivedSchemasAreInSyncWithTheCRD`).
+
+The LLM agent's provider credential is **process configuration only**:
+`praxisbench run --agent llm` (provider `anthropic`) reads `ANTHROPIC_API_KEY`
+from the environment; there is no flag for it, it is never logged, and every
+provider error is scrubbed before it can carry it.
 
 ---
 
