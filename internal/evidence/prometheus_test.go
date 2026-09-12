@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 )
@@ -57,6 +58,15 @@ func promFixture() *fakeProm {
 	f.responses[instantiated("red-restarts")] = nil
 	// slo burn: no recording rule in this cluster → query error.
 	f.errors[instantiated("slo-error-budget-burn")] = fmt.Errorf("query prometheus: connection refused")
+	// pdb budget: the deadlocked storefront PDB exactly as the pinned
+	// stack's kube-state-metrics v2.20.0 renders it through the template
+	// (verified live): three series per PDB tagged by the synthetic
+	// state label — minAvailable 3 over 2 healthy pods, budget pinned 0.
+	f.responses[instantiated(tmplPDBBudget)] = []Sample{
+		{Labels: map[string]string{keyNamespace: goldenNS, labelPDB: goldenPDBName, labelState: "disruptions_allowed"}, Value: "0"},
+		{Labels: map[string]string{keyNamespace: goldenNS, labelPDB: goldenPDBName, labelState: "desired_healthy"}, Value: "3"},
+		{Labels: map[string]string{keyNamespace: goldenNS, labelPDB: goldenPDBName, labelState: "current_healthy"}, Value: "2"},
+	}
 	// remaining templates: one series each.
 	for _, id := range []string{"red-unready-pods", "use-cpu-usage", "use-cpu-throttling"} {
 		f.responses[instantiated(id)] = []Sample{
@@ -65,6 +75,16 @@ func promFixture() *fakeProm {
 	}
 	return f
 }
+
+const (
+	tmplPDBBudget = "use-pdb-disruption-budget"
+	// labelPDB is kube-state-metrics' PDB-identity label, verified live;
+	// labelState is the template's own synthetic per-family tag.
+	labelPDB   = "poddisruptionbudget"
+	labelState = "state"
+	// goldenPDBName matches the pdb-deadlock fault's PDB.
+	goldenPDBName = "storefront-pdb"
+)
 
 const tmplUseMemoryFull = "use-memory-working-set"
 
@@ -119,6 +139,51 @@ func TestCollectPrometheusTemplates(t *testing.T) {
 	}
 	if _, hasSeries := burn.Data[MetricDataSeries]; hasSeries {
 		t.Error("failed query fabricated a series key")
+	}
+}
+
+// TestPDBTemplateSatisfiesTheDeadlockAnswerKey proves the pdb-deadlock
+// scenario's frozen ground truth is satisfiable by real evidence: fed the
+// representative deadlocked-PDB series (the exact shape the pinned
+// kube-state-metrics v2.20.0 emits through the template, verified live),
+// collection plus assembly yields a Metric item whose id matches the
+// pack's literal requiredEvidenceIdPattern "ev/metric-*"
+// (bench/scenarios/pdb-deadlock/scenario.yaml) and whose data carries the
+// budget identity and the replica-shortfall arithmetic a correct
+// diagnosis must name.
+func TestPDBTemplateSatisfiesTheDeadlockAnswerKey(t *testing.T) {
+	items := CollectPrometheus(context.Background(), promFixture(), []string{goldenNS})
+	bundle, _, _, err := Assemble(testIncidentRef(), fixedCollectedAt, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pdbItem *Item
+	for i := range bundle.Items {
+		if bundle.Items[i].Data[MetricDataTemplate] == tmplPDBBudget {
+			pdbItem = &bundle.Items[i]
+		}
+	}
+	if pdbItem == nil {
+		t.Fatal("no assembled item carries the PDB disruption-budget template")
+	}
+
+	// The pack's answer key: requiredEvidenceIdPatterns: [ev/metric-*].
+	if ok, err := path.Match("ev/metric-*", pdbItem.ID); err != nil || !ok {
+		t.Errorf("item id %q does not match the pdb-deadlock pattern ev/metric-* (err=%v)", pdbItem.ID, err)
+	}
+	if pdbItem.Type != ItemTypeMetric || pdbItem.Source != SourcePrometheus {
+		t.Errorf("item type/source = %s/%s, want Metric/prometheus", pdbItem.Type, pdbItem.Source)
+	}
+
+	// The series must expose what §17.3 asks a diagnosis to name: the
+	// protected budget and the shortfall arithmetic (2 healthy < 3
+	// desired ⇒ 0 disruptions allowed), rendered sorted.
+	wantSeries := `{namespace="shop",poddisruptionbudget="storefront-pdb",state="current_healthy"} 2` + "\n" +
+		`{namespace="shop",poddisruptionbudget="storefront-pdb",state="desired_healthy"} 3` + "\n" +
+		`{namespace="shop",poddisruptionbudget="storefront-pdb",state="disruptions_allowed"} 0`
+	if got := pdbItem.Data[MetricDataSeries]; got != wantSeries {
+		t.Errorf("PDB series rendering:\n got %q\nwant %q", got, wantSeries)
 	}
 }
 

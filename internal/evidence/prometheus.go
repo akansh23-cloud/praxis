@@ -74,9 +74,12 @@ const (
 // path (LLD §6 / master plan Phase 3: "RED/USE + SLO burn ... from a
 // small template set"). The RED pair reads the error side of
 // rate/errors/duration from what every kube-state-metrics install
-// exports; the USE trio covers utilization and saturation via cadvisor;
-// the SLO template reads the conventional burn-rate recording rule and
-// honestly comes back empty where no such rule is defined.
+// exports; the USE templates cover utilization and saturation — cpu,
+// memory and throttling via cadvisor, plus disruption-budget saturation
+// via kube-state-metrics' PDB series (the evidence the pdb-deadlock
+// answer key requires); the SLO template reads the conventional
+// burn-rate recording rule and honestly comes back empty where no such
+// rule is defined.
 var queryTemplates = []QueryTemplate{
 	{ID: "red-restarts", Signal: SignalRED,
 		Expr: `sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace=~"%s"}[15m])) > 0`},
@@ -88,6 +91,21 @@ var queryTemplates = []QueryTemplate{
 		Expr: `sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~"%s",container!=""})`},
 	{ID: "use-cpu-throttling", Signal: SignalUSE,
 		Expr: `sum by (namespace, pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=~"%s"}[5m])) > 0`},
+	// use-pdb-disruption-budget reads the disruption-budget saturation of
+	// every PDB in scope as one item: disruptions_allowed (the budget left
+	// — 0 means every voluntary disruption is blocked), current_healthy
+	// and desired_healthy (the arithmetic that explains why). The three
+	// kube-state-metrics families — all [STABLE], verified against the
+	// pinned bench stack's kube-state-metrics v2.20.0 (prometheus chart
+	// 29.27.0), and the same family the pdb-deadlock pack's fixPredicate
+	// reads — share one label set per PDB, so each side is tagged with a
+	// synthetic "state" label first; `or` then unions instead of
+	// deduplicating, and the outer sum drops scrape-job noise labels.
+	{ID: "use-pdb-disruption-budget", Signal: SignalUSE,
+		Expr: `sum by (namespace, poddisruptionbudget, state) (` +
+			`label_replace(kube_poddisruptionbudget_status_pod_disruptions_allowed{namespace=~"%[1]s"}, "state", "disruptions_allowed", "", "")` +
+			` or label_replace(kube_poddisruptionbudget_status_current_healthy{namespace=~"%[1]s"}, "state", "current_healthy", "", "")` +
+			` or label_replace(kube_poddisruptionbudget_status_desired_healthy{namespace=~"%[1]s"}, "state", "desired_healthy", "", ""))`},
 	{ID: "slo-error-budget-burn", Signal: SignalSLO,
 		Expr: `max by (namespace) (slo:error_budget_burn_rate{namespace=~"%s"})`},
 }
