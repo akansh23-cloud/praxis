@@ -14,8 +14,9 @@ order it was made. Three things exist so far:
    permanent `prompt-injection` pack ([ADR-010](../docs/adr/ADR-010.md))
    and the inert `smoke` proof. This is the side-by-side the LLM campaign
    is to be compared with.
-3. **The LLM campaign** (§3) — **not yet measured.** The verification host
-   had no provider credential. Nothing in this file is a model number.
+3. **The LLM campaign** (§3) — **deferred, not yet measured.** The
+   verification host had no provider credential. Nothing in this file is a
+   model number, and `v0.1.0` is not released until it has one.
 
 Between the two measurements nothing in the baseline
 (`internal/agents/rulebased`), the six answer keys, the scorer's matching
@@ -320,7 +321,7 @@ pack is 5; smoke is 5. No table in this repository folds them together.
 
 ---
 
-## 3. The LLM campaign — not yet measured
+## 3. The LLM campaign — deferred, not yet measured
 
 **No model has been measured on this benchmark.** Playbook Session 3.4
 requires `praxisbench run --scenario all --agent llm --runs 5` with a
@@ -333,6 +334,14 @@ substituted for it. The scripted-endpoint proof of Session 3.3 (a fake
 Ollama-shaped server answering the real pipeline; see
 `docs/PROGRESS.md`) shows the path works end to end and is **not** a
 model measurement; it is not reported here as one.
+
+This is Phase 3's one open exit requirement, **FR-P3-07: deferred — real
+provider measurement not complete.** `v0.1.0` is not released: the Phase 3
+code is published on `main` without a tag, and the tag waits for the
+numbers this section will hold. `docs/PROGRESS.md` carries the gate as a
+checklist — real-provider smoke, the full campaign, the injection pack
+with a real model 5/5, the measured metrics, the README/RESULTS update,
+then the release.
 
 What is proven without a credential, and what the campaign will add:
 

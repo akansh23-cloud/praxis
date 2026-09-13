@@ -169,7 +169,12 @@ hypotheses and schema-constrained plans, measured by its own benchmark, on top
 of a typed object model with hash-bound approval** — and nothing acts on the
 cluster. It is not a working remediation system, and nothing here should be
 run against a cluster you care about. There is no published image, no
-compatibility promise, and `v1alpha1` will change.
+compatibility promise, and `v1alpha1` will change. **There is no `v0.1.0`
+release yet:** Phase 3's exit requires the real-model benchmark measurement
+(FR-P3-07), which is deferred until a provider credential is available on a
+verification host; the Phase 3 code is published on `main` without the tag,
+and [`docs/PROGRESS.md`](docs/PROGRESS.md) carries the open gate as a
+checklist.
 
 The eight phases and their exit criteria are in
 [`docs/00-MASTER-PLAN.md`](docs/00-MASTER-PLAN.md), with the per-criterion
@@ -205,7 +210,7 @@ collection. Tokens and USD: none — the baseline calls no model. The
 inert smoke proof (5 runs) is reported in `bench/RESULTS.md` only.
 
 **LLM agent (`--agent llm`, provider Anthropic, default model
-`claude-opus-5`): not yet measured.** The campaign
+`claude-opus-5`): deferred — not yet measured.** The campaign
 `praxisbench run --scenario all --agent llm --runs 5` needs a provider
 credential the verification host did not have on 2026-09-12, and no
 number is published until it has run. When it runs, this table gains, per
