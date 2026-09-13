@@ -12,7 +12,7 @@
 1. Put these three docs in the repo at `docs/` before Phase 0 ends. Every prompt assumes they are there.
 2. One phase = several Claude Code sessions. Start each session with the phase prompt (or the relevant slice of it), and let Claude Code re-read `docs/` — the docs are the source of truth, not chat memory.
 3. Work in small commits with conventional-commit messages. Ask Claude Code to show failing tests before fixes when practical.
-4. Never advance a phase before its **Exit criteria** all pass. The criteria are the contract.
+4. Never advance a phase before its **Exit criteria** all pass. The criteria are the contract. One controlled exception exists (ADR-011): a criterion that depends on an *external* input the project cannot supply itself — a provider credential for a measurement, say — may be explicitly deferred, with the maintainer's approval, its closure checklist in `docs/PROGRESS.md`, an ADR, and the milestone or tag it gates still withheld, provided the next phase does not depend on the missing evidence and what is deferred is never a security, admission, architecture or benchmark-integrity criterion. Engineering quality is never the thing deferred.
 5. Keep an `docs/adr/` directory. ADR-001..004 already exist in code comments (closed vocabulary, snapshot-in-status, integer confidence, predicate templates); write them out as files in Phase 0. New load-bearing decisions get new ADRs.
 6. Security invariants that apply to **every** phase and every prompt:
    - The analyzer path never gains cluster write RBAC; the executor path never gains LLM/internet egress.

@@ -30,7 +30,13 @@
   status.observedGeneration on every write; reconciles are idempotent.
 - Timers/deadlines via RequeueAfter computed from timestamps in status —
   never in-process timers.
-- Do not start the next phase's work early, even if it seems easy.
+- Do not start the next phase's work early. A phase may advance with an
+  explicitly deferred, external-only exit criterion only when the
+  maintainer approves it, the deferral and its closure checklist are
+  recorded in docs/PROGRESS.md and an ADR, the next phase does not depend
+  on the missing evidence, and no security, architecture, admission or
+  benchmark-integrity gate is being waived. The deferred milestone/tag
+  stays blocked until the criterion closes (ADR-011).
 
 ## Standard handoff format (end every session with this)
 1. Files changed (grouped by intent)

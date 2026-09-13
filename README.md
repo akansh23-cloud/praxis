@@ -334,6 +334,7 @@ LLD is updated and an ADR is written in the same commit.
 | [ADR-008](docs/adr/ADR-008.md) | Redaction scope: the scrubber runs over every item value |
 | [ADR-009](docs/adr/ADR-009.md) | Citation failure is refused before a plan exists, and rejected if one does |
 | [ADR-010](docs/adr/ADR-010.md) | Prompt injection is a permanent benchmark pack, measured as visibility and inertness |
+| [ADR-011](docs/adr/ADR-011.md) | Defer the external Phase 3 measurement while continuing deterministic Phase 4 development |
 
 ---
 
