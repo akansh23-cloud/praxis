@@ -2,9 +2,11 @@
 
 Thanks for looking. Before anything else, the honest state of things:
 
-**Praxis is pre-v0.1 and has one maintainer.** It is at Phase 0 of an eight-phase
-plan (`docs/00-MASTER-PLAN.md`). The API types exist and are enforced; the
-control loop does not exist yet. That means a large unsolicited pull request is
+**Praxis is pre-v1 and has one maintainer.** It is at Phase 3 of an eight-phase
+plan (`docs/00-MASTER-PLAN.md`): the API types are enforced, the analyzer half
+(evidence bundles, the LLM agent, the benchmark) exists and is measured, and
+the executor half — policy, dry-run, approval UX, execution, verification,
+rollback — does not exist yet. That means a large unsolicited pull request is
 likely to collide with work already sequenced for a later phase, no matter how
 good it is. **Open an issue first.** For anything beyond a typo, agreement on
 the approach before you write code will save you more time than it costs.
@@ -26,10 +28,12 @@ In rough order:
 3. **Portability reports.** `docs/DEVELOPMENT.md` §2 lists the one configuration
    this has been verified on. If a fresh clone fails to build on macOS, on
    arm64, or on native Linux, that is a real bug and a very welcome issue.
-4. **Benchmark scenarios.** `docs/02-LLD.md` §17 specifies the scenario schema.
-   Real incidents you have actually seen — with a fault mechanism and a ground
-   truth — are hard to invent and easy to contribute. They land in Phase 5, but
-   the descriptions are useful now.
+4. **Benchmark scenarios.** `docs/02-LLD.md` §17 specifies the scenario schema
+   and `bench/README.md` shows how a pack is added (about 30 lines of YAML plus
+   a mechanical fault check). Real incidents you have actually seen — with a
+   fault mechanism and a ground truth — are hard to invent and easy to
+   contribute; the effect-side predicates they declare are evaluated from
+   Phase 5 on.
 
 ## What will be declined
 

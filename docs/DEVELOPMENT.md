@@ -1,9 +1,10 @@
 # Development
 
-Everything Praxis needs runs on a laptop. There is no cloud account, no
-managed cluster and no LLM API key required to build, test or install what
-exists today — Phase 0 ships API types and scaffolding, and none of it calls a
-model.
+Everything Praxis needs runs on a laptop. There is no cloud account and no
+managed cluster; nothing that builds, tests, installs or runs the manager
+needs an LLM API key. The one thing that does is the benchmark's model-backed
+agent (`praxisbench run --agent llm`), which reads `ANTHROPIC_API_KEY` from
+the environment (§8) — every test of that agent runs against a scripted fake.
 
 ---
 
@@ -178,9 +179,9 @@ Skaffold was chosen over Tilt because this repository is already
 kustomize-native: `skaffold.yaml` points its kustomize deployer at
 `config/default` verbatim, whereas a Tiltfile would restate the same deployment
 in Starlark and become a second thing to keep in sync. **`skaffold.yaml` has
-not been exercised** — there is no controller logic to hot-reload yet, so the
-in-cluster loop has no work to do in Phase 0. Treat it as a starting point, not
-a verified path.
+not been exercised** — every verified flow so far runs the manager on the host,
+and the in-cluster posture becomes the test subject only when the analyzer and
+executor split (Phase 5). Treat it as a starting point, not a verified path.
 
 ---
 
@@ -188,11 +189,14 @@ a verified path.
 
 | Command | What it runs | Needs |
 |---|---|---|
-| `make test` | unit + envtest (real API server + etcd, no kubelet) | Go only |
-| `make test-e2e-chainsaw` | the Phase 1 Chainsaw suite (walk, approval, rejections) against its own kind cluster `praxis-chainsaw`, manager on the host | Docker, kind |
+| `make test` | unit + envtest (real API server + etcd, no kubelet): CRD/CEL tables, the phase machine, evidence collection and redaction, the LLM agent over a scripted model, the import boundary, the CRD-derived schemas | Go only |
+| `make -C bench test` | the benchmark module: scenario loader (every shipped pack), the deterministic scorer, the fault-check registry, the scenario-blind harness and the injection boundary through the real collector | Go only |
+| `make test-e2e-chainsaw` | the Chainsaw suite (5 tests: full walk with a real evidence bundle, wrong-hash approval, evidence mismatch, immutable spec, out-of-vocabulary verb) against its own kind cluster `praxis-chainsaw`, manager on the host | Docker, kind |
 | `make test-e2e` | scaffold Ginkgo suite: in-cluster deployment posture (image, kustomize overlay, metrics) on `praxis-test-e2e` | Docker, kind |
-| `make lint` | golangci-lint incl. `logcheck` | Go |
+| `make lint` | `make schema-check` (derived planner schemas match the CRD) then golangci-lint incl. `logcheck` and the LLM import-boundary depguard rule | Go |
+| `make -C bench lint` | the same linter over the benchmark module | Go |
 | `make lint-config` | validates `.golangci.yml` itself | Go |
+| `bench/bin/praxisbench run …` | the benchmark itself, against its own kind cluster `praxis-bench` (see `bench/README.md`) | Docker, kind |
 
 envtest gives a **real API server**, which is why the CRD validation checkpoint
 means something: CEL rules, enum bounds and the spec-immutability transition
@@ -236,24 +240,31 @@ The framework's own end-to-end run remains unverified.
 
 ## 8. Repository layout
 
-The tree follows `docs/02-LLD.md` §2. Most `internal/` packages are `doc.go`
-placeholders that state a single responsibility and name the phase that fills
-them in — deliberately, so the shape of the system is legible before the code
-exists.
+The tree follows `docs/02-LLD.md` §2. The `internal/` packages of the
+executor half (risk, policy, simulate, approve, executor, verify, rollback,
+audit) are still `doc.go` placeholders that state a single responsibility and
+name the phase that fills them in — deliberately, so the shape of the system is
+legible before the code exists.
 
 ```
 api/v1alpha1/     CRD types — Incident, RemediationPlan. The security boundary.
 cmd/main.go       manager entrypoint (kubebuilder scaffold; what make run runs)
-cmd/analyzer/     analyzer binary — LLM egress, no write RBAC        [Phase 3]
-cmd/executor/     executor binary — write RBAC, no egress          [Phase 2-5]
+cmd/analyzer/     analyzer binary — LLM egress, no write RBAC        [Phase 5 split]
+cmd/executor/     executor binary — write RBAC, no egress            [Phase 5 split]
 internal/         one package per pipeline stage; see each doc.go
+  evidence/       collectors, caps, canonical bytes, redaction, log templating
+  llm/            LLMClient seam + anthropic/, ollama/ (the only model code)
+  agents/         Agent seam; rulebased/ (frozen floor), llm/ (the analyzer)
+  planschema/     planner/hypotheses JSON Schemas derived from the CRD
+  validate/       the citation validator (real since Session 3.3)
+  controller/     Incident (Detected → Collecting → Analyzed) and plan phases
 config/           kustomize: crd/, rbac/, manager/, network-policy/
 policies/         Kyverno/CEL policy bundle                          [Phase 4]
-bench/            praxisbench — becomes its own Go module            [Phase 5]
+bench/            praxisbench — its own Go module since Phase 2 (bench/README.md)
 deploy/grafana/   dashboard JSON
-docs/             plan, HLD, LLD, adr/
-hack/             boilerplate header, pre-commit helper scripts
-test/e2e/         end-to-end suite
+docs/             plan, HLD, LLD, adr/, PROGRESS.md
+hack/             boilerplate header, schema-derive, pre-commit helper scripts
+test/e2e/         Chainsaw suite + scaffold Ginkgo suite
 ```
 
 Two deliberate deviations from LLD §2, recorded here rather than silently:
@@ -289,7 +300,25 @@ The planner's JSON Schemas are **derived from the CRD**, never hand-written:
 The LLM agent's provider credential is **process configuration only**:
 `praxisbench run --agent llm` (provider `anthropic`) reads `ANTHROPIC_API_KEY`
 from the environment; there is no flag for it, it is never logged, and every
-provider error is scrubbed before it can carry it.
+provider error is scrubbed before it can carry it. It is the only credential
+anything in this repository reads, and only that command reads it.
+
+**Benchmark telemetry seams.** The evidence collector's Metric and LogTemplate
+items come from Prometheus and Loki; the benchmark passes their URLs as flags,
+like the manager's `--prometheus-url` / `--loki-url`. Against the bench
+cluster, port-forward the `monitoring` services first:
+
+```bash
+export KUBECONFIG=bench/.praxis-bench.kubeconfig
+kubectl -n monitoring port-forward svc/prometheus-server 19090:80 &
+kubectl -n monitoring port-forward svc/loki 13100:3100 &
+bench/bin/praxisbench run --scenario oomkill-after-commit --agent rulebased \
+  --prometheus-url http://127.0.0.1:19090 --loki-url http://127.0.0.1:13100
+```
+
+Without the flags a run still works; the bundle then honestly carries no
+Metric or LogTemplate evidence — and on the `prompt-injection` pack the
+injection never reaches the model, which the run records and says.
 
 ---
 
